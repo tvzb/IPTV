@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IPTV 自定义直播源工作台</title>
+  <style>
+    :root {
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --bg: #f8fafc;
+      --card-bg: #ffffff;
+      --text: #0f172a;
+      --text-muted: #64748b;
+      --border: #e2e8f0;
+      --danger: #ef4444;
+      --success: #10b981;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      padding: 24px;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    h1 { font-size: 1.5rem; font-weight: 700; color: #1e293b; }
+    .subtitle { font-size: 0.875rem; color: var(--text-muted); }
+
+    .header-actions {
+      display: flex;
+      gap: 12px;
+    }
+
+    button {
+      cursor: pointer;
+      font-size: 0.875rem;
+      font-weight: 500;
+      padding: 8px 16px;
+      border-radius: 6px;
+      border: 1px solid transparent;
+      transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover { background: var(--primary-hover); }
+    .btn-outline { background: #fff; border-color: var(--border); color: var(--text); }
+    .btn-outline:hover { background: #f1f5f9; }
+    .btn-danger { background: #fee2e2; color: var(--danger); border-color: #fca5a5; }
+    .btn-danger:hover { background: #fecaca; }
+    .btn-sm { padding: 4px 8px; font-size: 0.75rem; }
+
+    .main-grid {
+      display: grid;
+      grid-template-columns: 360px 1fr;
+      gap: 24px;
+    }
+
+    @media (max-width: 768px) {
+      .main-grid { grid-template-columns: 1fr; }
+    }
+
+    .panel {
+      background: var(--card-bg);
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      height: calc(100vh - 140px);
+      min-height: 500px;
+    }
+
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .panel-title { font-weight: 600; font-size: 1rem; }
+
+    .search-box {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-bottom: 12px;
+      font-size: 0.875rem;
+    }
+
+    .scroll-area {
+      overflow-y: auto;
+      flex: 1;
+      padding-right: 4px;
+    }
+
+    /* 预置库样式 */
+    .preset-group-title {
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      margin: 12px 0 6px 0;
+    }
+
+    .channel-chip {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 12px;
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-bottom: 6px;
+      font-size: 0.875rem;
+    }
+
+    .channel-chip:hover {
+      background: #f1f5f9;
+    }
+
+    /* 自定义分类样式 */
+    .category-card {
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 16px;
+      padding: 12px;
+    }
+
+    .category-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .category-title {
+      font-weight: 600;
+      font-size: 0.95rem;
+      color: #1e293b;
+    }
+
+    .target-channel-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #ffffff;
+      padding: 6px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      margin-bottom: 6px;
+      font-size: 0.875rem;
+    }
+
+    .item-controls {
+      display: flex;
+      gap: 4px;
+    }
+
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      display: none;
+      justify-content: center;
+      align-items: center;
+      z-index: 100;
+    }
+
+    .modal {
+      background: #fff;
+      border-radius: 8px;
+      padding: 24px;
+      max-width: 500px;
+      width: 90%;
+    }
+
+    .modal h3 { margin-bottom: 12px; }
+    .form-group { margin-bottom: 12px; }
+    .form-group label { display: block; font-size: 0.8rem; margin-bottom: 4px; font-weight: 500; }
+    .form-control { width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <div>
+      <h1>📺 IPTV 自定义直播源工作台</h1>
+      <div class="subtitle">自主定制分类与频道清单，支持一键导出与云端自动化采集</div>
+    </div>
+    <div class="header-actions">
+      <button class="btn-outline" onclick="openAddCategoryModal()">+ 新建分类</button>
+      <button class="btn-outline" onclick="copyJsonConfig()">📋 复制配置</button>
+      <button class="btn-primary" onclick="exportJsonConfig()">💾 导出 channels.json</button>
+      <button class="btn-primary" style="background: #059669;" onclick="openRunModal()">🚀 启动云端工作流</button>
+    </div>
+  </header>
+
+  <div class="main-grid">
+    <!-- 左侧：频道总库预置池 -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">📚 频道预置库</span>
+        <span style="font-size: 0.75rem; color: var(--text-muted);">点击加号添加</span>
+      </div>
+      <input type="text" id="searchInput" class="search-box" placeholder="搜索频道名称..." oninput="filterPresets()">
+      <div class="scroll-area" id="presetContainer">
+        <!-- 动态生成预置频道 -->
+      </div>
+    </div>
+
+    <!-- 右侧：用户定制分类与频道清单 -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">📋 我的定制直播清单</span>
+        <span id="totalChannelCount" style="font-size: 0.75rem; color: var(--text-muted);">共 0 个频道</span>
+      </div>
+      <div class="scroll-area" id="categoryContainer">
+        <!-- 动态渲染分类与所选频道 -->
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 新增分类弹窗 -->
+<div class="modal-overlay" id="addCategoryModal">
+  <div class="modal">
+    <h3>新增频道分类</h3>
+    <div class="form-group">
+      <label>分类名称</label>
+      <input type="text" id="newCategoryName" class="form-control" placeholder="如：我的最爱、特色剧场">
+    </div>
+    <div style="display: flex; justify-content: flex-end; gap: 8px;">
+      <button class="btn-outline" onclick="closeModal('addCategoryModal')">取消</button>
+      <button class="btn-primary" onclick="confirmAddCategory()">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- 启动工作流弹窗 -->
+<div class="modal-overlay" id="runModal">
+  <div class="modal">
+    <h3>云端触发采集与测速工作流</h3>
+    <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px;">
+      将通过 GitHub REST API 直接触发你仓库中的 GitHub Actions 工作流。Token 仅保存在浏览器本地。
+    </p>
+    <div class="form-group">
+      <label>GitHub 仓库 (格式: 用户名/仓库名)</label>
+      <input type="text" id="ghRepo" class="form-control" placeholder="如: tvzb/workflow">
+    </div>
+    <div class="form-group">
+      <label>GitHub Personal Access Token (PAT，需包含 workflow 权限)</label>
+      <input type="password" id="ghToken" class="form-control" placeholder="ghp_xxxxxxxxxxxx">
+    </div>
+    <div class="form-group">
+      <label>触发的工作流</label>
+      <select id="workflowSelect" class="form-control">
+        <option value="harvest.yml">1-全网直播源采集与清洗 (Harvest)</option>
+        <option value="speedtest.yml">2-TVBox直播源测速与优选 (Speedtest)</option>
+      </select>
+    </div>
+    <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;">
+      <button class="btn-outline" onclick="closeModal('runModal')">取消</button>
+      <button class="btn-primary" onclick="triggerGithubWorkflow()">立即触发</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // 1. 预置频道库全集
+  const PRESET_LIBRARY = {
+    "央视频道": [
+      "CCTV-1 综合", "CCTV-2 财经", "CCTV-3 综艺", "CCTV-4 中文国际",
+      "CCTV-5 体育", "CCTV-6 电影", "CCTV-7 国防军事", "CCTV-8 电视剧",
+      "CCTV-9 纪录", "CCTV-10 科教", "CCTV-11 戏曲", "CCTV-12 社会与法",
+      "CCTV-13 新闻", "CCTV-14 少儿", "CCTV-15 音乐", "CCTV-16 奥林匹克",
+      "CCTV-17 农业农村"
+    ],
+    "卫视频道": [
+      "江西卫视", "东方卫视", "北京卫视", "江苏卫视", "浙江卫视", "湖南卫视", "辽宁卫视",
+      "安徽卫视", "重庆卫视", "东南卫视", "甘肃卫视", "广东卫视", "广西卫视", "贵州卫视",
+      "海南卫视", "河北卫视", "河南卫视", "黑龙江卫视", "湖北卫视", "吉林卫视", "内蒙古卫视",
+      "宁夏卫视", "青海卫视", "山东卫视", "山西卫视", "陕西卫视", "深圳卫视", "四川卫视",
+      "天津卫视", "西藏卫视", "新疆卫视", "云南卫视"
+    ]
+  };
+
+  // 2. 默认用户配置
+  let userConfig = {
+    "央视频道": [...PRESET_LIBRARY["央视频道"]],
+    "卫视频道": [...PRESET_LIBRARY["卫视频道"]]
+  };
+
+  let activeCategoryForAdd = "央视频道";
+
+  function init() {
+    renderPresets();
+    renderUserConfig();
+    // 恢复本地存储的配置
+    const saved = localStorage.getItem("iptv_custom_channels");
+    if (saved) {
+      try { userConfig = JSON.parse(saved); renderUserConfig(); } catch(e){}
+    }
+    const savedRepo = localStorage.getItem("iptv_gh_repo");
+    if (savedRepo) document.getElementById("ghRepo").value = savedRepo;
+  }
+
+  function renderPresets() {
+    const container = document.getElementById("presetContainer");
+    container.innerHTML = "";
+    const filter = document.getElementById("searchInput").value.trim().toLowerCase();
+
+    for (const [groupName, channels] of Object.entries(PRESET_LIBRARY)) {
+      const filtered = channels.filter(c => c.toLowerCase().includes(filter));
+      if (filtered.length === 0) continue;
+
+      const title = document.createElement("div");
+      title.className = "preset-group-title";
+      title.textContent = groupName;
+      container.appendChild(title);
+
+      filtered.forEach(ch => {
+        const item = document.createElement("div");
+        item.className = "channel-chip";
+        item.innerHTML = `
+          <span>${ch}</span>
+          <button class="btn-outline btn-sm" onclick="addChannelToActive('${ch}')">+ 添加</button>
+        `;
+        container.appendChild(item);
+      });
+    }
+  }
+
+  function filterPresets() {
+    renderPresets();
+  }
+
+  function renderUserConfig() {
+    const container = document.getElementById("categoryContainer");
+    container.innerHTML = "";
+    let totalCount = 0;
+
+    for (const [catName, channels] of Object.entries(userConfig)) {
+      totalCount += channels.length;
+      const card = document.createElement("div");
+      card.className = "category-card";
+
+      const header = document.createElement("div");
+      header.className = "category-header";
+      header.innerHTML = `
+        <div>
+          <span class="category-title">${catName}</span>
+          <span style="font-size:0.75rem; color:var(--text-muted); margin-left:6px;">(${channels.length})</span>
+        </div>
+        <div style="display:flex; gap:6px;">
+          <button class="btn-outline btn-sm" style="${activeCategoryForAdd === catName ? 'border-color:var(--primary);color:var(--primary);font-weight:700;' : ''}" onclick="setActiveCategory('${catName}')">
+            ${activeCategoryForAdd === catName ? '● 当前注入分类' : '设为目标分类'}
+          </button>
+          <button class="btn-danger btn-sm" onclick="deleteCategory('${catName}')">删除分类</button>
+        </div>
+      `;
+      card.appendChild(header);
+
+      const listDiv = document.createElement("div");
+      channels.forEach((ch, idx) => {
+        const row = document.createElement("div");
+        row.className = "target-channel-item";
+        row.innerHTML = `
+          <span>${idx + 1}. ${ch}</span>
+          <div class="item-controls">
+            <button class="btn-outline btn-sm" onclick="moveChannel('${catName}', ${idx}, -1)" ${idx === 0 ? 'disabled' : ''}>↑</button>
+            <button class="btn-outline btn-sm" onclick="moveChannel('${catName}', ${idx}, 1)" ${idx === channels.length - 1 ? 'disabled' : ''}>↓</button>
+            <button class="btn-danger btn-sm" onclick="removeChannel('${catName}', ${idx})">✕</button>
+          </div>
+        `;
+        listDiv.appendChild(row);
+      });
+
+      card.appendChild(listDiv);
+      container.appendChild(card);
+    }
+
+    document.getElementById("totalChannelCount").textContent = `共 ${totalCount} 个频道`;
+    localStorage.setItem("iptv_custom_channels", JSON.stringify(userConfig));
+  }
+
+  function setActiveCategory(cat) {
+    activeCategoryForAdd = cat;
+    renderUserConfig();
+  }
+
+  function addChannelToActive(ch) {
+    if (!userConfig[activeCategoryForAdd]) {
+      const keys = Object.keys(userConfig);
+      if (keys.length > 0) activeCategoryForAdd = keys[0];
+      else { alert("请先新增分类！"); return; }
+    }
+    if (userConfig[activeCategoryForAdd].includes(ch)) {
+      alert(`频道【${ch}】已在该分类中！`);
+      return;
+    }
+    userConfig[activeCategoryForAdd].push(ch);
+    renderUserConfig();
+  }
+
+  function moveChannel(cat, idx, dir) {
+    const list = userConfig[cat];
+    const target = idx + dir;
+    if (target < 0 || target >= list.length) return;
+    const temp = list[idx];
+    list[idx] = list[target];
+    list[target] = temp;
+    renderUserConfig();
+  }
+
+  function removeChannel(cat, idx) {
+    userConfig[cat].splice(idx, 1);
+    renderUserConfig();
+  }
+
+  function deleteCategory(cat) {
+    if (confirm(`确定删除分类【${cat}】及其所有频道吗？`)) {
+      delete userConfig[cat];
+      const keys = Object.keys(userConfig);
+      if (keys.length > 0) activeCategoryForAdd = keys[0];
+      renderUserConfig();
+    }
+  }
+
+  function openAddCategoryModal() {
+    document.getElementById("newCategoryName").value = "";
+    document.getElementById("addCategoryModal").style.display = "flex";
+  }
+
+  function confirmAddCategory() {
+    const name = document.getElementById("newCategoryName").value.trim();
+    if (!name) return;
+    if (userConfig[name]) { alert("分类名称已存在！"); return; }
+    userConfig[name] = [];
+    activeCategoryForAdd = name;
+    closeModal("addCategoryModal");
+    renderUserConfig();
+  }
+
+  function closeModal(id) {
+    document.getElementById(id).style.display = "none";
+  }
+
+  function exportJsonConfig() {
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(userConfig, null, 2));
+    const dlAnchorElem = document.createElement('a');
+    dlAnchorElem.setAttribute("href", dataStr);
+    dlAnchorElem.setAttribute("download", "channels.json");
+    dlAnchorElem.click();
+  }
+
+  function copyJsonConfig() {
+    navigator.clipboard.writeText(JSON.stringify(userConfig, null, 2)).then(() => {
+      alert("✅ 配置内容已成功复制到剪贴板！可直接粘贴保存为 channels.json");
+    });
+  }
+
+  function openRunModal() {
+    document.getElementById("runModal").style.display = "flex";
+  }
+
+  async function triggerGithubWorkflow() {
+    const repo = document.getElementById("ghRepo").value.trim();
+    const token = document.getElementById("ghToken").value.trim();
+    const workflow = document.getElementById("workflowSelect").value;
+
+    if (!repo || !token) {
+      alert("请填写 GitHub 仓库名和包含 workflow 权限的 PAT Token！");
+      return;
+    }
+
+    localStorage.setItem("iptv_gh_repo", repo);
+
+    try {
+      const url = `https://api.github.com/repos/${repo}/actions/workflows/${workflow}/dispatches`;
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${token}`,
+          "Accept": "application/vnd.github.v3+json",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ ref: "main" })
+      });
+
+      if (resp.status === 204) {
+        alert("🚀 工作流触发成功！请前往 GitHub Actions 页面查看实时测速与生成进度！");
+        closeModal("runModal");
+      } else {
+        const err = await resp.text();
+        alert(`触发失败 (HTTP ${resp.status}): ${err}`);
+      }
+    } catch(e) {
+      alert(`请求异常: ${e}`);
+    }
+  }
+
+  init();
+</script>
+</body>
+</html>
