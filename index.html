@@ -23,11 +23,11 @@
       background-color: var(--bg);
       color: var(--text);
       line-height: 1.5;
-      padding: 24px;
+      padding: 20px;
     }
 
     .container {
-      max-width: 1200px;
+      max-width: 1240px;
       margin: 0 auto;
     }
 
@@ -35,7 +35,7 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 24px;
+      margin-bottom: 20px;
       padding-bottom: 16px;
       border-bottom: 1px solid var(--border);
       flex-wrap: wrap;
@@ -45,9 +45,32 @@
     h1 { font-size: 1.5rem; font-weight: 700; color: #1e293b; }
     .subtitle { font-size: 0.875rem; color: var(--text-muted); }
 
-    .header-actions {
+    .nav-tabs {
       display: flex;
-      gap: 12px;
+      gap: 8px;
+      margin-bottom: 20px;
+      border-bottom: 2px solid var(--border);
+      padding-bottom: 2px;
+    }
+
+    .tab-btn {
+      padding: 10px 18px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      border: none;
+      background: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      border-radius: 6px 6px 0 0;
+      border-bottom: 3px solid transparent;
+      margin-bottom: -4px;
+      transition: all 0.2s;
+    }
+
+    .tab-btn.active {
+      color: var(--primary);
+      border-bottom-color: var(--primary);
+      background: #eff6ff;
     }
 
     button {
@@ -69,12 +92,18 @@
     .btn-outline:hover { background: #f1f5f9; }
     .btn-danger { background: #fee2e2; color: var(--danger); border-color: #fca5a5; }
     .btn-danger:hover { background: #fecaca; }
+    .btn-success { background: #d1fae5; color: #065f46; border-color: #a7f3d0; }
+    .btn-success:hover { background: #a7f3d0; }
     .btn-sm { padding: 4px 8px; font-size: 0.75rem; }
 
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* 模式 1：频道定制面板布局 */
     .main-grid {
       display: grid;
       grid-template-columns: 360px 1fr;
-      gap: 24px;
+      gap: 20px;
     }
 
     @media (max-width: 768px) {
@@ -88,8 +117,8 @@
       padding: 16px;
       display: flex;
       flex-direction: column;
-      height: calc(100vh - 140px);
-      min-height: 500px;
+      height: calc(100vh - 180px);
+      min-height: 540px;
     }
 
     .panel-header {
@@ -118,7 +147,6 @@
       padding-right: 4px;
     }
 
-    /* 预置库样式 */
     .preset-group-title {
       font-size: 0.8rem;
       font-weight: 700;
@@ -139,11 +167,6 @@
       font-size: 0.875rem;
     }
 
-    .channel-chip:hover {
-      background: #f1f5f9;
-    }
-
-    /* 自定义分类样式 */
     .category-card {
       background: #f8fafc;
       border: 1px solid var(--border);
@@ -159,12 +182,6 @@
       margin-bottom: 8px;
     }
 
-    .category-title {
-      font-weight: 600;
-      font-size: 0.95rem;
-      color: #1e293b;
-    }
-
     .target-channel-item {
       display: flex;
       justify-content: space-between;
@@ -177,9 +194,38 @@
       font-size: 0.875rem;
     }
 
-    .item-controls {
+    /* 模式 2：自有直播源导入与极速测速面板 */
+    .paste-box-container {
+      background: var(--card-bg);
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      padding: 20px;
+    }
+
+    .textarea-custom {
+      width: 100%;
+      height: 380px;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 0.875rem;
+      line-height: 1.4;
+      resize: vertical;
+      margin-top: 10px;
+      margin-bottom: 16px;
+      background: #fafafa;
+    }
+
+    .format-toolbar {
       display: flex;
-      gap: 4px;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      background: #f1f5f9;
+      padding: 10px 14px;
+      border-radius: 6px;
     }
 
     .modal-overlay {
@@ -196,7 +242,7 @@
       background: #fff;
       border-radius: 8px;
       padding: 24px;
-      max-width: 500px;
+      max-width: 520px;
       width: 90%;
     }
 
@@ -212,37 +258,86 @@
   <header>
     <div>
       <h1>📺 IPTV 自定义直播源工作台</h1>
-      <div class="subtitle">自主定制分类与频道清单，支持一键导出与云端自动化采集</div>
+      <div class="subtitle">自主编排分类频道、导入自有直播源、双格式（M3U/TXT）极速测速与筛选</div>
     </div>
-    <div class="header-actions">
-      <button class="btn-outline" onclick="openAddCategoryModal()">+ 新建分类</button>
-      <button class="btn-outline" onclick="copyJsonConfig()">📋 复制配置</button>
-      <button class="btn-primary" onclick="exportJsonConfig()">💾 导出 channels.json</button>
-      <button class="btn-primary" style="background: #059669;" onclick="openRunModal()">🚀 启动云端工作流</button>
+    <div style="display:flex; gap:10px;">
+      <button class="btn-primary" style="background:#059669;" onclick="openRunModal()">🚀 启动云端工作流</button>
     </div>
   </header>
 
-  <div class="main-grid">
-    <!-- 左侧：频道总库预置池 -->
-    <div class="panel">
-      <div class="panel-header">
-        <span class="panel-title">📚 频道预置库</span>
-        <span style="font-size: 0.75rem; color: var(--text-muted);">点击加号添加</span>
+  <!-- 选项卡导航 -->
+  <div class="nav-tabs">
+    <button class="tab-btn active" onclick="switchTab('tab-channels')">📋 自定义分类与频道编排</button>
+    <button class="tab-btn" onclick="switchTab('tab-paste')">⚡ 粘贴自有直播源 & 测速清洗 (M3U / TXT)</button>
+  </div>
+
+  <!-- Tab 1: 自定义分类与频道编排 -->
+  <div id="tab-channels" class="tab-content active">
+    <div style="display:flex; justify-content: flex-end; gap:8px; margin-bottom:12px;">
+      <button class="btn-outline btn-sm" onclick="openAddCategoryModal()">+ 新建分类</button>
+      <button class="btn-outline btn-sm" onclick="copyJsonConfig()">📋 复制 JSON 配置</button>
+      <button class="btn-primary btn-sm" onclick="exportJsonConfig()">💾 导出 channels.json</button>
+    </div>
+    <div class="main-grid">
+      <!-- 左侧：频道总库预置池 -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">📚 预置频道库</span>
+          <span style="font-size: 0.75rem; color: var(--text-muted);">点击加号注入</span>
+        </div>
+        <input type="text" id="searchInput" class="search-box" placeholder="搜索频道名称..." oninput="filterPresets()">
+        <div class="scroll-area" id="presetContainer"></div>
       </div>
-      <input type="text" id="searchInput" class="search-box" placeholder="搜索频道名称..." oninput="filterPresets()">
-      <div class="scroll-area" id="presetContainer">
-        <!-- 动态生成预置频道 -->
+
+      <!-- 右侧：用户定制分类与频道清单 -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">📋 我的定制分类列表</span>
+          <span id="totalChannelCount" style="font-size: 0.75rem; color: var(--text-muted);">共 0 个频道</span>
+        </div>
+        <div class="scroll-area" id="categoryContainer"></div>
       </div>
     </div>
+  </div>
 
-    <!-- 右侧：用户定制分类与频道清单 -->
-    <div class="panel">
-      <div class="panel-header">
-        <span class="panel-title">📋 我的定制直播清单</span>
-        <span id="totalChannelCount" style="font-size: 0.75rem; color: var(--text-muted);">共 0 个频道</span>
+  <!-- Tab 2: 自有直播源输入框、格式转换与快速测速 -->
+  <div id="tab-paste" class="tab-content">
+    <div class="paste-box-container">
+      <div class="format-toolbar">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span style="font-size:0.9rem; font-weight:600;">输入格式识别：</span>
+          <label style="font-size:0.85rem; cursor:pointer;"><input type="radio" name="inputFmt" value="auto" checked onchange="autoDetectFormat()"> 自动检测</label>
+          <label style="font-size:0.85rem; cursor:pointer;"><input type="radio" name="inputFmt" value="txt" onchange="autoDetectFormat()"> TXT (频道名,链接)</label>
+          <label style="font-size:0.85rem; cursor:pointer;"><input type="radio" name="inputFmt" value="m3u" onchange="autoDetectFormat()"> M3U (#EXTINF)</label>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn-outline btn-sm" onclick="cleanDollarSignsInEditor()">🧹 清洗去除 $ 字符</button>
+          <button class="btn-outline btn-sm" onclick="convertToTxt()">🔄 快速转为 TXT</button>
+          <button class="btn-outline btn-sm" onclick="convertToM3u()">🔄 快速转为 M3U</button>
+        </div>
       </div>
-      <div class="scroll-area" id="categoryContainer">
-        <!-- 动态渲染分类与所选频道 -->
+
+      <textarea id="rawSourceEditor" class="textarea-custom" placeholder="支持直接粘贴你现有的直播源地址列表（TXT 或 M3U 格式均可，例如）：
+
+TXT 示例：
+央视频道,#genre#
+CCTV-1 综合,http://173.208.212.130:8181/1080p/cctv1.m3u8$订阅源
+CCTV-2 财经,http://173.208.212.130:8181/1080p/cctv2.m3u8
+卫视频道,#genre#
+江西卫视,http://173.208.212.130:8181/1080p/jiangxi.m3u8
+
+或者 M3U 示例：
+#EXTM3U
+#EXTINF:-1 group-title=&quot;央视频道&quot;,CCTV-1 综合
+http://173.208.212.130:8181/1080p/cctv1.m3u8"></textarea>
+
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+        <div id="statsSummary" style="font-size:0.85rem; color:var(--text-muted);">已输入：0 行，共 0 个直播源地址</div>
+        <div style="display:flex; gap:10px;">
+          <button class="btn-outline" onclick="exportCustomSourceFile('txt')">💾 导出为 raw_sources.txt</button>
+          <button class="btn-outline" onclick="exportCustomSourceFile('m3u')">💾 导出为 raw_sources.m3u</button>
+          <button class="btn-primary" style="background:#2563eb;" onclick="prepareAndRunSpeedtest()">🚀 提交并启动云端测速筛选</button>
+        </div>
       </div>
     </div>
   </div>
@@ -267,23 +362,24 @@
 <div class="modal-overlay" id="runModal">
   <div class="modal">
     <h3>云端触发采集与测速工作流</h3>
-    <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px;">
-      将通过 GitHub REST API 直接触发你仓库中的 GitHub Actions 工作流。Token 仅保存在浏览器本地。
-    </p>
     <div class="form-group">
       <label>GitHub 仓库 (格式: 用户名/仓库名)</label>
-      <input type="text" id="ghRepo" class="form-control" placeholder="如: tvzb/workflow">
+      <input type="text" id="ghRepo" class="form-control" placeholder="如: tvzb/IPTV">
     </div>
     <div class="form-group">
       <label>GitHub Personal Access Token (PAT，需包含 workflow 权限)</label>
       <input type="password" id="ghToken" class="form-control" placeholder="ghp_xxxxxxxxxxxx">
     </div>
     <div class="form-group">
-      <label>触发的工作流</label>
+      <label>执行模式</label>
       <select id="workflowSelect" class="form-control">
-        <option value="harvest.yml">1-全网直播源采集与清洗 (Harvest)</option>
-        <option value="speedtest.yml">2-TVBox直播源测速与优选 (Speedtest)</option>
+        <option value="speedtest.yml">2-TVBox直播源测速与优选 (Speedtest - 输出 live.txt & live.m3u)</option>
+        <option value="harvest.yml">1-全网直播源采集与清洗 (Harvest - 输出 raw_sources)</option>
       </select>
+    </div>
+    <div class="form-group">
+      <label>最低流畅播放速率门槛 (KB/s，达标不限数量)</label>
+      <input type="number" id="minSpeedKbs" class="form-control" value="300">
     </div>
     <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;">
       <button class="btn-outline" onclick="closeModal('runModal')">取消</button>
@@ -293,7 +389,6 @@
 </div>
 
 <script>
-  // 1. 预置频道库全集
   const PRESET_LIBRARY = {
     "央视频道": [
       "CCTV-1 综合", "CCTV-2 财经", "CCTV-3 综艺", "CCTV-4 中文国际",
@@ -311,7 +406,6 @@
     ]
   };
 
-  // 2. 默认用户配置
   let userConfig = {
     "央视频道": [...PRESET_LIBRARY["央视频道"]],
     "卫视频道": [...PRESET_LIBRARY["卫视频道"]]
@@ -322,13 +416,23 @@
   function init() {
     renderPresets();
     renderUserConfig();
-    // 恢复本地存储的配置
     const saved = localStorage.getItem("iptv_custom_channels");
     if (saved) {
       try { userConfig = JSON.parse(saved); renderUserConfig(); } catch(e){}
     }
     const savedRepo = localStorage.getItem("iptv_gh_repo");
     if (savedRepo) document.getElementById("ghRepo").value = savedRepo;
+
+    const editor = document.getElementById("rawSourceEditor");
+    editor.addEventListener("input", updateStats);
+    updateStats();
+  }
+
+  function switchTab(tabId) {
+    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
+    event.target.classList.add("active");
+    document.getElementById(tabId).classList.add("active");
   }
 
   function renderPresets() {
@@ -357,9 +461,7 @@
     }
   }
 
-  function filterPresets() {
-    renderPresets();
-  }
+  function filterPresets() { renderPresets(); }
 
   function renderUserConfig() {
     const container = document.getElementById("categoryContainer");
@@ -375,12 +477,12 @@
       header.className = "category-header";
       header.innerHTML = `
         <div>
-          <span class="category-title">${catName}</span>
+          <span style="font-weight:600;">${catName}</span>
           <span style="font-size:0.75rem; color:var(--text-muted); margin-left:6px;">(${channels.length})</span>
         </div>
         <div style="display:flex; gap:6px;">
           <button class="btn-outline btn-sm" style="${activeCategoryForAdd === catName ? 'border-color:var(--primary);color:var(--primary);font-weight:700;' : ''}" onclick="setActiveCategory('${catName}')">
-            ${activeCategoryForAdd === catName ? '● 当前注入分类' : '设为目标分类'}
+            ${activeCategoryForAdd === catName ? '● 目标分类' : '设为目标'}
           </button>
           <button class="btn-danger btn-sm" onclick="deleteCategory('${catName}')">删除分类</button>
         </div>
@@ -406,14 +508,11 @@
       container.appendChild(card);
     }
 
-    document.getElementById("totalChannelCount").textContent = `共 ${totalCount} 个频道`;
+    document.getElementById("totalChannelCount").textContent = `共 ${totalCount} 个定制频道`;
     localStorage.setItem("iptv_custom_channels", JSON.stringify(userConfig));
   }
 
-  function setActiveCategory(cat) {
-    activeCategoryForAdd = cat;
-    renderUserConfig();
-  }
+  function setActiveCategory(cat) { activeCategoryForAdd = cat; renderUserConfig(); }
 
   function addChannelToActive(ch) {
     if (!userConfig[activeCategoryForAdd]) {
@@ -439,10 +538,7 @@
     renderUserConfig();
   }
 
-  function removeChannel(cat, idx) {
-    userConfig[cat].splice(idx, 1);
-    renderUserConfig();
-  }
+  function removeChannel(cat, idx) { userConfig[cat].splice(idx, 1); renderUserConfig(); }
 
   function deleteCategory(cat) {
     if (confirm(`确定删除分类【${cat}】及其所有频道吗？`)) {
@@ -468,22 +564,136 @@
     renderUserConfig();
   }
 
-  function closeModal(id) {
-    document.getElementById(id).style.display = "none";
-  }
+  function closeModal(id) { document.getElementById(id).style.display = "none"; }
 
   function exportJsonConfig() {
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(userConfig, null, 2));
-    const dlAnchorElem = document.createElement('a');
-    dlAnchorElem.setAttribute("href", dataStr);
-    dlAnchorElem.setAttribute("download", "channels.json");
-    dlAnchorElem.click();
+    downloadFile(dataStr, "channels.json");
   }
 
   function copyJsonConfig() {
     navigator.clipboard.writeText(JSON.stringify(userConfig, null, 2)).then(() => {
-      alert("✅ 配置内容已成功复制到剪贴板！可直接粘贴保存为 channels.json");
+      alert("✅ 配置内容已成功复制到剪贴板！保存为 channels.json 即可生效。");
     });
+  }
+
+  // ================= 文本框、格式转换与清洗逻辑 =================
+  function updateStats() {
+    const text = document.getElementById("rawSourceEditor").value;
+    const lines = text.split("\n").filter(l => l.trim().length > 0);
+    const urls = lines.filter(l => l.includes("http"));
+    document.getElementById("statsSummary").textContent = `已输入：${lines.length} 行，检测到约 ${urls.length} 个直播流地址`;
+  }
+
+  function cleanDollarSignsInEditor() {
+    const editor = document.getElementById("rawSourceEditor");
+    const lines = editor.value.split("\n");
+    const cleaned = lines.map(line => {
+      if (line.includes("$")) {
+        return line.split("$")[0].trim();
+      }
+      return line;
+    });
+    editor.value = cleaned.join("\n");
+    updateStats();
+    alert("🧹 已成功清除所有直播源中的 '$' 符号及后置文字！");
+  }
+
+  function parseTextToStreams(text) {
+    const lines = text.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+    let streams = [];
+    let currentGroup = "默认分类";
+
+    if (text.includes("#EXTM3U")) {
+      let currentTitle = "";
+      for (const line of lines) {
+        if (line.startsWith("#EXTINF")) {
+          const groupMatch = line.match(/group-title="([^"]+)"/);
+          if (groupMatch) currentGroup = groupMatch[1];
+          const nameMatch = line.match(/,(.+)$/);
+          if (nameMatch) currentTitle = nameMatch[1].trim();
+        } else if (line.startsWith("http")) {
+          streams.push({ group: currentGroup, title: currentTitle || "未知频道", url: line.split("$")[0].trim() });
+          currentTitle = "";
+        }
+      }
+    } else {
+      for (const line of lines) {
+        if (line.includes(",#genre#")) {
+          currentGroup = line.split(",")[0].trim();
+        } else if (line.includes(",") && line.includes("http")) {
+          const parts = line.split(",", 1);
+          const rest = line.substring(parts[0].length + 1).trim();
+          streams.push({ group: currentGroup, title: parts[0].trim(), url: rest.split("$")[0].trim() });
+        }
+      }
+    }
+    return streams;
+  }
+
+  function convertToTxt() {
+    const text = document.getElementById("rawSourceEditor").value;
+    const streams = parseTextToStreams(text);
+    if (streams.length === 0) { alert("未检测到有效直播源！"); return; }
+
+    const groups = {};
+    streams.forEach(s => {
+      if (!groups[s.group]) groups[s.group] = [];
+      groups[s.group].push(`${s.title},${s.url}`);
+    });
+
+    let out = [];
+    for (const [grp, lines] of Object.entries(groups)) {
+      out.push(`${grp},#genre#`);
+      out.push(...lines);
+    }
+    document.getElementById("rawSourceEditor").value = out.join("\n");
+    updateStats();
+  }
+
+  function convertToM3u() {
+    const text = document.getElementById("rawSourceEditor").value;
+    const streams = parseTextToStreams(text);
+    if (streams.length === 0) { alert("未检测到有效直播源！"); return; }
+
+    let out = ['#EXTM3U x-tvg-url="https://live.fanmingming.com/e.xml"'];
+    streams.forEach(s => {
+      out.push(`#EXTINF:-1 tvg-name="${s.title}" group-title="${s.group}",${s.title}`);
+      out.push(s.url);
+    });
+    document.getElementById("rawSourceEditor").value = out.join("\n");
+    updateStats();
+  }
+
+  function exportCustomSourceFile(fmt) {
+    const text = document.getElementById("rawSourceEditor").value.trim();
+    if (!text) { alert("输入框为空，无法导出！"); return; }
+    if (fmt === "txt") {
+      convertToTxt();
+      const content = document.getElementById("rawSourceEditor").value;
+      downloadFile("data:text/plain;charset=utf-8," + encodeURIComponent(content), "raw_sources.txt");
+    } else {
+      convertToM3u();
+      const content = document.getElementById("rawSourceEditor").value;
+      downloadFile("data:text/plain;charset=utf-8," + encodeURIComponent(content), "raw_sources.m3u");
+    }
+  }
+
+  function downloadFile(dataUrl, filename) {
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = filename;
+    a.click();
+  }
+
+  function prepareAndRunSpeedtest() {
+    const text = document.getElementById("rawSourceEditor").value.trim();
+    if (!text) {
+      alert("请先粘贴你要测速筛选的直播源列表！");
+      return;
+    }
+    openRunModal();
+    document.getElementById("workflowSelect").value = "speedtest.yml";
   }
 
   function openRunModal() {
@@ -494,9 +704,10 @@
     const repo = document.getElementById("ghRepo").value.trim();
     const token = document.getElementById("ghToken").value.trim();
     const workflow = document.getElementById("workflowSelect").value;
+    const minSpeed = document.getElementById("minSpeedKbs").value.trim() || "300";
 
     if (!repo || !token) {
-      alert("请填写 GitHub 仓库名和包含 workflow 权限的 PAT Token！");
+      alert("请填写你的 GitHub 仓库（格式如: tvzb/IPTV）以及 PAT Token！");
       return;
     }
 
@@ -511,11 +722,14 @@
           "Accept": "application/vnd.github.v3+json",
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ ref: "main" })
+        body: JSON.stringify({
+          ref: "main",
+          inputs: workflow === "speedtest.yml" ? { min_speed_kbs: minSpeed } : {}
+        })
       });
 
       if (resp.status === 204) {
-        alert("🚀 工作流触发成功！请前往 GitHub Actions 页面查看实时测速与生成进度！");
+        alert("🚀 工作流触发成功！请前往 GitHub 仓库 Actions 页面查看实时测速与生成进度！生成完毕将同步产出 live.txt 与 live.m3u！");
         closeModal("runModal");
       } else {
         const err = await resp.text();
