@@ -18,7 +18,7 @@ on:
       min_speed_kbs:
         description: '最低流畅播放速率门槛 (KB/s，达标不限数量，越多越好)'
         required: true
-        default: '300'
+        default: '150'
 
 permissions:
   contents: write
