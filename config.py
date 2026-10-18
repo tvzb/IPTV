@@ -280,7 +280,7 @@ RAW_SOURCES_M3U = "raw_sources.m3u"
 OUTPUT_LIVE_TXT = "live.txt"
 OUTPUT_LIVE_M3U = "live.m3u"
 
-MIN_SPEED_KBS = float(os.environ.get("MIN_SPEED_KBS", 150.0))
+MIN_SPEED_KBS = float(os.environ.get("MIN_SPEED_KBS", 300.0))
 TVBOX_USER_AGENT = "okhttp/3.12.1"
 REQUEST_TIMEOUT = 5.0
 CHUNK_DOWNLOAD_TIMEOUT = 2.0
