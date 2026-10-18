@@ -1,0 +1,53 @@
+name: 2-TVBox直播源测速与优选 (Speedtest)
+
+on:
+  workflow_dispatch:
+    inputs:
+      min_speed_kbs:
+        description: '最低流畅播放速率门槛 (KB/s，不设数量上限)'
+        required: true
+        default: '300'
+
+permissions:
+  contents: write
+
+jobs:
+  speedtest-sources:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 检出仓库代码 (Checkout Repository)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 安装与配置 Python 环境 (Set up Python)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 安装项目依赖 (Install Dependencies)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 执行 TVBox 原生测速与达标优选 (Run Speedtester)
+        env:
+          MIN_SPEED_KBS: ${{ github.event.inputs.min_speed_kbs }}
+          PYTHONUNBUFFERED: "1"
+        run: |
+          python -u speedtester.py
+
+      - name: 提交并推流更新 live.txt (Commit and Push)
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add live.txt
+          if git diff --staged --quiet; then
+            echo "优选直播源无变更，跳过提交。"
+          else
+            git commit -m "chore(iptv): update live.txt with speed threshold ${{ github.event.inputs.min_speed_kbs }}KB/s [skip ci]"
+            git push
+          fi
