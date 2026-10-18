@@ -2,11 +2,13 @@
 """
 IPTV 自动化核心引擎 (Main Engine)：
 针对用户现场实测痛点专项攻坚：
-1. 【彻底铲除 1M/s 黑屏源】：精准识别并剔除广电专有 AVS+/CAVS/AVS2 编码（95%安卓电视硬解黑屏）及加密未解密源；
-2. 【画质分级与 1080P 顶格置顶】：实行 1080P (FHD) -> 720P (HD) -> 标清 (SD) 绝对画质分级，把模糊标清源踢到列表最末或淘汰；
-3. 【国内低延迟直连加成 (Domestic Priority)】：对国内直连节点与主流免翻 CDN 赋予置顶加权，彻底解决“海外测速快但在国内电视卡顿”的跨洋反转假象；
-4. 【同服务器防独占 (IP Diversity)】：单频道同 IP 最多保留 2 条线路，多网运营商与多 CDN 互补备份；
-5. 【取消 5 条写死上限】：不限数量，符合高画质与流畅标准的优质源全部保留。
+1. 【彻底铲除 1M/s 黑屏源】：
+   - 底层原生解析 MPEG-TS 包头，精准拦截 DVB-CSA 加密加扰源；
+   - 严格闭环 ffprobe 首帧解码，严厉淘汰广电专有 AVS+/CAVS/AVS2 编码与无法渲染的空流。
+2. 【画质分级与 1080P 顶格置顶】：实行 1080P (FHD) -> 720P (HD) -> 标清 (SD) 绝对画质分级，把模糊标清源排在末尾。
+3. 【国内低延迟直连加成 (Domestic Priority)】：对国内三大运营商直连节点与免翻 CDN 赋予置顶加权，消除跨洋反转卡顿。
+4. 【同服务器防独占 (IP Diversity)】：单频道同 IP 最多保留 2 条线路，多网运营商与多 CDN 互补备份。
+5. 【取消数量写死限制】：达标不限数量，符合高画质与流畅标准的优质源全部保留。
 """
 import os
 import re
@@ -49,7 +51,7 @@ HEADERS = {
     "Connection": "keep-alive"
 }
 
-# 全网精选 16 个每日同步、高带宽且编码兼容性极佳的公共源矩阵
+# 全网精选 14 个每日同步、高带宽且编码兼容性极佳的公共源矩阵
 FALLBACK_GITHUB_MATRIX = [
     "https://raw.githubusercontent.com/fanmingming/live/main/tv/m3u/ipv4.m3u",
     "https://raw.githubusercontent.com/Ftindy/IPTV-URL/main/output/result.txt",
@@ -110,7 +112,7 @@ def search_github_code_files(query: str, max_items: int = 15) -> List[str]:
                     raw_urls.append(raw_url)
         elif resp.status_code in (403, 429):
             print(f"[!] GitHub API 达到访问配额 ({resp.status_code})，将使用备用高星源池与种子裂变引擎。", flush=True)
-    except Exception as e:
+    except Exception:
         pass
 
     return raw_urls
@@ -143,7 +145,7 @@ def parse_streams_from_text(content: str) -> List[Tuple[str, str]]:
                 name_match = re.search(r',([^,]+)$', line)
                 if name_match:
                     current_title = name_match.group(1).strip()
-            elif line.startswith("http://") or line.startswith("https://"):
+            elif line.startswith("http://") or line.startswith("https://") or line.startswith("rtmp://"):
                 if current_title:
                     clean_url = clean_stream_url(line)
                     norm_ch = normalize_channel_name(current_title)
@@ -155,7 +157,7 @@ def parse_streams_from_text(content: str) -> List[Tuple[str, str]]:
     for line in lines:
         if line.startswith("#") or ",#genre#" in line or "更新时间" in line:
             continue
-        if "," in line and ("http://" in line or "https://" in line):
+        if "," in line and ("http://" in line or "https://" in line or "rtmp://" in line):
             parts = line.split(",", 1)
             raw_ch = parts[0].strip()
             raw_url = parts[1].strip()
@@ -409,6 +411,59 @@ def parse_input_sources(source_file: str) -> Dict[str, List[str]]:
 
     return channel_streams
 
+def check_ts_scrambling(data: bytes) -> Tuple[bool, str]:
+    """
+    基于 MPEG-2 Transport Stream (ISO/IEC 13818-1) 规范原生检测 TS 加扰状态:
+    每个 TS 数据包长 188 字节，Byte 0 固定为同步字 0x47。
+    Byte 3 的第 7~6 位为 transport_scrambling_control (TSC):
+      00: 未加扰 (明文广播，普通电视机顶盒与播放器可直接硬解)
+      01: DVB 预留
+      10: 偶密钥加扰 (DVB-CSA CA 加密)
+      11: 奇密钥加扰 (DVB-CSA CA 加密)
+    
+    电信/联通/广电 IPTV 机顶盒源（特别是 CCTV-3/5/6/8 等国家加密频道）常带有 DVB-CSA 加扰。
+    虽然网络层能以 1~2 MB/s 全速拉取数据并解析出 PMT（显示 1920x1080），但普通 Android TV 盒子
+    因缺乏硬件 CA 智能卡无法解密视频 PES 负载，导致播放器无限缓冲黑屏！
+    """
+    if len(data) < 376:
+        return False, "数据过短无法分析TS结构"
+
+    offset = 0
+    while offset < len(data) - 188:
+        if data[offset] == 0x47 and data[offset + 188] == 0x47:
+            break
+        offset += 1
+
+    if offset >= len(data) - 188:
+        return False, "未检索到标准TS同步字节(0x47)"
+
+    total_payload_pkts = 0
+    scrambled_pkts = 0
+    idx = offset
+
+    while idx + 188 <= len(data):
+        pkt = data[idx:idx + 188]
+        if pkt[0] != 0x47:
+            idx += 1
+            continue
+
+        pid = ((pkt[1] & 0x1F) << 8) | pkt[2]
+        # 排除 PAT(0x0000), CAT(0x0001), 空包(0x1FFF) 等明文信令表
+        if pid not in (0x0000, 0x0001, 0x1FFF):
+            tsc = (pkt[3] >> 6) & 0x03
+            total_payload_pkts += 1
+            if tsc != 0:
+                scrambled_pkts += 1
+
+        idx += 188
+        if total_payload_pkts >= 400:
+            break
+
+    if total_payload_pkts > 0 and (scrambled_pkts / total_payload_pkts) > 0.05:
+        return True, f"DVB-CSA加扰加密 (加扰包比例: {scrambled_pkts}/{total_payload_pkts})"
+
+    return False, "明文未加扰"
+
 def test_single_stream_speed(channel_name: str, stream_url: str) -> Tuple[str, str, float, bool, str, int, bool, float]:
     """
     单条直播流深度评测：
@@ -473,7 +528,7 @@ def test_single_stream_speed(channel_name: str, stream_url: str) -> Tuple[str, s
             if r_ts.status_code == 200:
                 for chunk in r_ts.iter_content(chunk_size=32 * 1024):
                     bytes_received += len(chunk)
-                    if len(media_buffer) < 128 * 1024:
+                    if len(media_buffer) < 384 * 1024:
                         media_buffer.extend(chunk)
                     if time.time() - download_start >= 2.5 or bytes_received >= CHUNK_DOWNLOAD_MAX_BYTES:
                         break
@@ -493,12 +548,20 @@ def test_single_stream_speed(channel_name: str, stream_url: str) -> Tuple[str, s
         if not (is_ts or is_mp4):
             return channel_name, clean_url, 0.0, False, "非视频数据流(无TS/MP4头)", 0, is_domestic, ttfb
 
+        # 核心拦截 1：DVB-CSA 加扰加密原生检测（精准拦截 >1m/s 但黑屏无限转圈的源）
+        if is_ts:
+            is_scrambled, scram_msg = check_ts_scrambling(raw_bytes)
+            if is_scrambled:
+                return channel_name, clean_url, 0.0, False, f"DVB-CSA加扰源(电视黑屏): {scram_msg}", 0, is_domestic, ttfb
+
         duration = max(time.time() - download_start, 0.05)
         speed_kbs = (bytes_received / 1024.0) / duration
 
-        # 本地内存 pipe ffprobe 首帧像素快速检测（0 网络延时）
-        video_tag = "高清"
-        res_tier = 2  # 默认按高清处理
+        # 核心拦截 2：ffprobe 严格首帧画面像素与兼容格式解码验证
+        # 严格闭环安全门：默认一律为 False，只有确实验证出合法有效视频画面的流才被允许放行！
+        is_valid = False
+        video_tag = "未知"
+        res_tier = 0
 
         try:
             cmd = [
@@ -509,34 +572,50 @@ def test_single_stream_speed(channel_name: str, stream_url: str) -> Tuple[str, s
                 "-of", "csv=s=x:p=0",
                 "-i", "pipe:0"
             ]
-            proc = subprocess.run(cmd, input=raw_bytes[:96 * 1024], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1.2)
+            proc = subprocess.run(
+                cmd,
+                input=raw_bytes[:min(len(raw_bytes), 384 * 1024)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=2.0
+            )
             out = proc.stdout.decode("utf-8", errors="ignore").strip()
             if out:
-                parts = out.split("x")
+                first_line = out.splitlines()[0]
+                parts = first_line.split("x")
                 if len(parts) >= 3:
                     codec = parts[0].lower()
                     # 关键拦截：广电专有 AVS/CAVS/AVS2/AVS3 编码在绝大多数电视盒子上无法硬件解码，直接黑屏！坚决淘汰！
                     if any(avs_name in codec for avs_name in ("cavs", "avs", "avs2", "avs3")):
-                        return channel_name, clean_url, 0.0, False, f"广电AVS+专有编码(电视黑屏)", 0, is_domestic, ttfb
+                        return channel_name, clean_url, 0.0, False, "广电AVS+专有编码(电视黑屏)", 0, is_domestic, ttfb
 
                     # 仅接纳主流兼容视频编码格式
-                    if codec not in ("h264", "avc", "hevc", "h265", "mpeg2video", "mpeg4"):
+                    if codec not in ("h264", "avc", "avc1", "hevc", "h265", "hev1", "mpeg2video", "mpeg4"):
                         return channel_name, clean_url, 0.0, False, f"不支持的视频编码({codec})", 0, is_domestic, ttfb
 
-                    w, h = int(parts[1]), int(parts[2])
-                    if h >= 1000 or w >= 1900:
-                        res_tier = 3
-                        tag = "1080P"
-                    elif h >= 700 or w >= 1200:
-                        res_tier = 2
-                        tag = "720P"
-                    else:
-                        res_tier = 1
-                        tag = "标清"
+                    try:
+                        w, h = int(parts[1]), int(parts[2])
+                    except ValueError:
+                        w, h = 0, 0
 
-                    video_tag = f"{codec.upper()} {tag}"
+                    if w > 0 and h > 0:
+                        is_valid = True
+                        if h >= 1000 or w >= 1900:
+                            res_tier = 3
+                            tag = "1080P"
+                        elif h >= 700 or w >= 1200:
+                            res_tier = 2
+                            tag = "720P"
+                        else:
+                            res_tier = 1
+                            tag = "标清"
+
+                        video_tag = f"{codec.upper()} {tag}"
         except Exception:
             pass
+
+        if not is_valid:
+            return channel_name, clean_url, 0.0, False, "首帧解码失败/无画面(黑屏)", 0, is_domestic, ttfb
 
         return channel_name, clean_url, speed_kbs, True, video_tag, res_tier, is_domestic, ttfb
 
@@ -547,7 +626,7 @@ def run_speedtest(source_file: str = RAW_SOURCES_TXT, min_speed: float = MIN_SPE
     print("=" * 65, flush=True)
     print(f"🚀 [阶段二] 开始 TVBox 深度测速与【画质分级/国内免翻节点优先】", flush=True)
     print(f"    - 流畅筛选门槛: >= {min_speed:.1f} KB/s (达标不限数量，越多越好)", flush=True)
-    print(f"    - 优化准则: 1080P顶格置顶 > 国内低延迟直连优先 > 彻底铲除 AVS+ 黑屏源", flush=True)
+    print(f"    - 优化准则: 1080P顶格置顶 > 国内低延迟直连优先 > 彻底铲除 DVB-CSA加扰/AVS+ 黑屏源", flush=True)
     print("=" * 65, flush=True)
 
     channel_streams = parse_input_sources(source_file)
@@ -594,7 +673,7 @@ def run_speedtest(source_file: str = RAW_SOURCES_TXT, min_speed: float = MIN_SPE
             if tested_count % 30 == 0 or tested_count == len(tasks):
                 elapsed = max(time.time() - start_time, 0.1)
                 rate = tested_count / elapsed
-                print(f"  [进展] 已评测 {tested_count}/{len(tasks)} 条 (合格: {passed_count} 条, 拦截AVS+黑屏/无效: {rejected_count} 条) ...", flush=True)
+                print(f"  [进展] 已评测 {tested_count}/{len(tasks)} 条 (合格: {passed_count} 条, 拦截DVB-CSA加扰/AVS+黑屏/无效: {rejected_count} 条) ...", flush=True)
 
     export_final_playlists(qualified_results, all_tested_results, user_struct)
 
@@ -689,7 +768,7 @@ def export_final_playlists(
     print(f"🎉 优选排序完成！")
     print(f"   - 1080P/高清源已全部自动置顶于前列线路 (线路1、线路2...)！")
     print(f"   - 国内免翻低延迟优质源已提升权重，杜绝卡顿！")
-    print(f"   - AVS+ 黑屏源已全数拦截！")
+    print(f"   - DVB-CSA 加扰与 AVS+ 黑屏源已全数拦截！")
     print(f"   - 交付文件 (TXT 格式): {OUTPUT_LIVE_TXT}")
     print(f"   - 交付文件 (M3U 格式): {OUTPUT_LIVE_M3U}")
     print("=" * 70, flush=True)
