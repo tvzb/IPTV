@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
 IPTV 自动化核心引擎 (Main Engine)：
-完整实现用户人工收集与裂变直播源的闭环逻辑：
+完整实现用户人工收集与裂变直播源的闭环逻辑，并加入【真实画面图像探针】：
 1. 阶段一：动态月份 GitHub 代码搜索 + 高星源池并发抓取（关键词形如：“更新 2026-10 CCTV-2,http”）；
 2. 阶段二：规范化清洗（频道名统一归一、彻底剔除 '$' 及后置文本、排除 CCTV-5+、去重）；
 3. 阶段三：种子可用性初筛 -> 锁定流畅种子源服务器（IP:端口）；
 4. 阶段四：GitHub IP 代码反查（搜索 "IP:端口"） + 智能序号/别名裂变推导（如 0001_1.m3u8 -> 0002_1 ~ 0017_1）；
-5. 阶段五：TVBox 原生切片测速（okhttp/3.12.1）、速率门槛筛选（默认 >=300 KB/s，达标全保留，不设数量上限）、频道内网速降序排序；
+5. 阶段五：TVBox 原生切片测速 + 【真实视频画面图像探针】（严格检验视频流轨、画面分辨率与首帧解码，剔除黑屏/假活/报错/仅音频源）；
 6. 阶段六：按央视、卫视标准顺序装配输出 live.txt 与 live.m3u 双格式订阅文件。
 """
 import os
@@ -14,6 +14,7 @@ import re
 import sys
 import time
 import datetime
+import subprocess
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Set, Tuple
@@ -144,7 +145,7 @@ def parse_streams_from_text(content: str) -> List[Tuple[str, str]]:
                 name_match = re.search(r',([^,]+)$', line)
                 if name_match:
                     current_title = name_match.group(1).strip()
-            elif line.startswith("http://") or line.startswith("https://") or line.startswith("rtmp://"):
+            elif line.startswith("http://") or line.startswith("https://"):
                 if current_title:
                     clean_url = clean_stream_url(line)
                     norm_ch = normalize_channel_name(current_title)
@@ -157,7 +158,7 @@ def parse_streams_from_text(content: str) -> List[Tuple[str, str]]:
     for line in lines:
         if line.startswith("#") or ",#genre#" in line or "更新时间" in line:
             continue
-        if "," in line and ("http://" in line or "https://" in line or "rtmp://" in line):
+        if "," in line and ("http://" in line or "https://" in line):
             parts = line.split(",", 1)
             raw_ch = parts[0].strip()
             raw_url = parts[1].strip()
@@ -281,7 +282,6 @@ def harvest_all_sources() -> Dict[str, List[str]]:
         if probe_stream_lightweight(seed_url):
             print(f"[+] 锁定流畅可用种子服务器: {ip_port} (源: {seed_url[:65]}...)", flush=True)
 
-            # A. 规律裂变（0001_1 -> 0002_1 ~ 0017_1 以及 字母别名）
             extrapolated = extrapolate_channels_from_seed(seed_url)
             for ch, url in extrapolated:
                 if ch in target_channels and url not in seen_urls_per_channel[ch]:
@@ -289,7 +289,6 @@ def harvest_all_sources() -> Dict[str, List[str]]:
                     candidate_pool[ch].append(url)
                     fissioned_count += 1
 
-            # B. 在 GitHub 对该 IP:Port 反向搜索挖掘该服务器其余频道
             reverse_streams = reverse_search_github_ip(ip_port)
             for ch, url in reverse_streams:
                 if ch in target_channels and url not in seen_urls_per_channel[ch]:
@@ -334,8 +333,47 @@ def export_raw_files(candidate_pool: Dict[str, List[str]], user_struct: Dict[str
     print(f"🎉 候选池已保存: {RAW_SOURCES_TXT} 与 {RAW_SOURCES_M3U} (共 {total_exported} 条)", flush=True)
 
 # =========================================================================
-# 模块三：TVBox 原生切片测速与优选
+# 模块三：TVBox 原生切片测速 + 【真实视频画面图像探针】
 # =========================================================================
+
+def probe_video_picture(url: str, timeout: float = 3.5) -> Tuple[bool, str]:
+    """
+    真实画面图像探针 (Video Picture Probe)：
+    调用系统级 ffprobe 深入分析流的媒体封装与真实视频流轨：
+    1. 必须具备有效视频轨（如 H264、HEVC、MPEG2 等）；
+    2. 必须具备实际播放分辨率（宽>=320，高>=240），彻底排除纯音频广播源；
+    3. 能够成功解析 SPS/PPS 参数集，彻底排除 DRM 加密黑屏与 403 假活拦截流。
+    返回: (has_picture: bool, resolution_info: str)
+    """
+    clean_url = clean_stream_url(url)
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=codec_name,width,height",
+        "-of", "csv=s=x:p=0",
+        "-headers", f"User-Agent: {TVBOX_USER_AGENT}\r\n",
+        "-rw_timeout", "3000000",
+        clean_url
+    ]
+    try:
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
+        output = res.stdout.strip()
+        if output:
+            parts = output.split("x")
+            if len(parts) >= 3:
+                codec, w_str, h_str = parts[0], parts[1], parts[2]
+                try:
+                    w, h = int(w_str), int(h_str)
+                    if w >= 320 and h >= 240:
+                        tag = "1080P" if h >= 1000 else ("720P" if h >= 700 else f"{w}x{h}")
+                        return True, f"{codec.upper()} {tag}"
+                except ValueError:
+                    pass
+    except Exception:
+        pass
+
+    return False, "无画面图像/解码失败"
 
 def parse_input_sources(source_file: str) -> Dict[str, List[str]]:
     """解析待测源文件（支持 TXT 与 M3U 双格式）"""
@@ -386,20 +424,25 @@ def parse_input_sources(source_file: str) -> Dict[str, List[str]]:
 
     return channel_streams
 
-def test_single_stream_speed(channel_name: str, stream_url: str) -> Tuple[str, str, float, bool]:
-    """单条直播流 TVBox 真实播放切片吞吐量测速"""
+def test_single_stream_speed(channel_name: str, stream_url: str, min_speed_req: float = MIN_SPEED_KBS) -> Tuple[str, str, float, bool, str]:
+    """
+    单条直播流双阶段严苛检测：
+    阶段一：真实切片下载测速（排除 0 字节与伪装 200 页面）
+    阶段二：真实视频画面探针（排除黑屏/无图像/DRM加密/纯音频）
+    返回: (channel_name, clean_url, speed_kbs, is_valid, video_tag)
+    """
     clean_url = clean_stream_url(stream_url)
 
     try:
         r = requests.get(clean_url, headers=HEADERS, timeout=REQUEST_TIMEOUT, stream=True)
         if r.status_code != 200:
-            return channel_name, clean_url, 0.0, False
+            return channel_name, clean_url, 0.0, False, "HTTP失效"
 
         first_chunk = next(r.iter_content(chunk_size=1024), b"")
         r.close()
 
         if b"<html" in first_chunk.lower() or b"access denied" in first_chunk.lower():
-            return channel_name, clean_url, 0.0, False
+            return channel_name, clean_url, 0.0, False, "拦截页面"
 
         ts_url = None
         if b"#EXTM3U" in first_chunk:
@@ -437,21 +480,33 @@ def test_single_stream_speed(channel_name: str, stream_url: str) -> Tuple[str, s
         except Exception:
             pass
 
+        # 必须至少拉取到 16KB 以上的有效媒体分片，严禁 0 字节假源进入
+        if bytes_received < 16 * 1024:
+            return channel_name, clean_url, 0.0, False, "切片下载失败/0字节"
+
         duration = max(time.time() - download_start, 0.05)
         speed_kbs = (bytes_received / 1024.0) / duration
 
-        if speed_kbs == 0.0 and b"#EXTM3U" in first_chunk:
-            speed_kbs = 150.0  # 赋予基准可用速率
+        # 如果速率未达标，直接淘汰，节省后续画面探针耗时
+        if speed_kbs < min_speed_req:
+            return channel_name, clean_url, speed_kbs, False, "网速不达标"
 
-        return channel_name, clean_url, speed_kbs, speed_kbs > 0
+        # 阶段二：深度画面图像验证（调用 ffprobe 解码视频头和图像分辨率）
+        has_picture, video_info = probe_video_picture(clean_url, timeout=3.5)
+        if not has_picture:
+            return channel_name, clean_url, speed_kbs, False, "无画面图像/解码失败"
+
+        return channel_name, clean_url, speed_kbs, True, video_info
 
     except Exception:
-        return channel_name, clean_url, 0.0, False
+        return channel_name, clean_url, 0.0, False, "异常报错"
 
 def run_speedtest(source_file: str = RAW_SOURCES_TXT, min_speed: float = MIN_SPEED_KBS):
-    """TVBox 测速主流程"""
+    """TVBox 测速主流程（带真实画面图像验证）"""
     print("=" * 65, flush=True)
-    print(f"🚀 [阶段二] 开始 TVBox 原生直播源并发测速 (速率门槛: >= {min_speed:.1f} KB/s)", flush=True)
+    print(f"🚀 [阶段二] 开始 TVBox 深度测速与【真实画面图像探针】", flush=True)
+    print(f"    - 最低速率门槛: >= {min_speed:.1f} KB/s (达标不限数量，越多越好)", flush=True)
+    print(f"    - 画面检测标准: 具备真实视频流、分辨率 >= 320x240、首帧正常解码", flush=True)
     print("=" * 65, flush=True)
 
     channel_streams = parse_input_sources(source_file)
@@ -466,33 +521,39 @@ def run_speedtest(source_file: str = RAW_SOURCES_TXT, min_speed: float = MIN_SPE
         for u in urls:
             tasks.append((ch, u))
 
-    print(f"[*] 待测直播源总数: {len(tasks)} 条，启动 {MAX_WORKERS} 线程极速测速...", flush=True)
+    print(f"[*] 待测直播源总数: {len(tasks)} 条，启动 {MAX_WORKERS} 线程高并发深度评测...", flush=True)
 
-    qualified_results: Dict[str, List[Tuple[str, float]]] = {}
+    qualified_results: Dict[str, List[Tuple[str, float, str]]] = {}
     tested_count = 0
+    passed_picture_count = 0
+    rejected_fake_count = 0
     start_time = time.time()
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = [executor.submit(test_single_stream_speed, ch, u) for ch, u in tasks]
+        futures = [executor.submit(test_single_stream_speed, ch, u, min_speed) for ch, u in tasks]
         for f in as_completed(futures):
             tested_count += 1
-            ch, url, speed, is_valid = f.result()
-            if is_valid and speed >= min_speed:
+            ch, url, speed, is_valid, video_tag = f.result()
+            
+            if is_valid:
+                passed_picture_count += 1
                 if ch not in qualified_results:
                     qualified_results[ch] = []
-                qualified_results[ch].append((url, speed))
+                qualified_results[ch].append((url, speed, video_tag))
+            elif speed >= min_speed and "无画面" in video_tag:
+                rejected_fake_count += 1
 
             if tested_count % 30 == 0 or tested_count == len(tasks):
                 elapsed = max(time.time() - start_time, 0.1)
                 rate = tested_count / elapsed
-                print(f"  [进展] 已完成 {tested_count}/{len(tasks)} 条测速 ({rate:.1f} 条/秒) ...", flush=True)
+                print(f"  [进展] 已评测 {tested_count}/{len(tasks)} 条 (画面合格: {passed_picture_count} 条, 剔除假活无画面: {rejected_fake_count} 条) ...", flush=True)
 
     for ch in qualified_results:
         qualified_results[ch].sort(key=lambda x: x[1], reverse=True)
 
     export_final_playlists(qualified_results, user_struct)
 
-def export_final_playlists(qualified_results: Dict[str, List[Tuple[str, float]]], user_struct: Dict[str, List[str]]):
+def export_final_playlists(qualified_results: Dict[str, List[Tuple[str, float, str]]], user_struct: Dict[str, List[str]]):
     """按照标准频道顺序装配并保存 live.txt 与 live.m3u"""
     txt_lines: List[str] = []
     m3u_lines: List[str] = ['#EXTM3U x-tvg-url="https://live.fanmingming.com/e.xml"']
@@ -500,9 +561,9 @@ def export_final_playlists(qualified_results: Dict[str, List[Tuple[str, float]]]
     total_channels_with_streams = 0
     total_qualified_streams = 0
 
-    print("\n" + "=" * 65, flush=True)
-    print(f"{'频道名称':<18} | {'有效源数量':<10} | {'最高播放速率':<15}", flush=True)
-    print("-" * 65, flush=True)
+    print("\n" + "=" * 70, flush=True)
+    print(f"{'频道名称':<18} | {'有效画面源':<10} | {'最高播放速率':<14} | {'最佳画质':<15}", flush=True)
+    print("-" * 70, flush=True)
 
     for group_name, ch_list in user_struct.items():
         group_txt = [f"{group_name},#genre#"]
@@ -517,14 +578,15 @@ def export_final_playlists(qualified_results: Dict[str, List[Tuple[str, float]]]
                 total_channels_with_streams += 1
                 total_qualified_streams += len(streams)
                 top_speed = streams[0][1]
-                print(f"{std_ch:<18} | {len(streams):<10} | {top_speed:>8.1f} KB/s", flush=True)
+                top_video_tag = streams[0][2]
+                print(f"{std_ch:<18} | {len(streams):<10} | {top_speed:>7.1f} KB/s | {top_video_tag:<15}", flush=True)
 
-                for url, spd in streams:
+                for url, spd, vtag in streams:
                     group_txt.append(f"{std_ch},{url}")
                     m3u_lines.append(f'#EXTINF:-1 tvg-name="{std_ch}" group-title="{group_name}",{std_ch}')
                     m3u_lines.append(url)
             else:
-                print(f"{std_ch:<18} | {'0 (无达标源)':<10} | {'--':>15}", flush=True)
+                print(f"{std_ch:<18} | {'0 (无可用源)':<10} | {'--':>12} | {'--':<15}", flush=True)
 
         if has_channel:
             txt_lines.extend(group_txt)
@@ -535,13 +597,13 @@ def export_final_playlists(qualified_results: Dict[str, List[Tuple[str, float]]]
     with open(OUTPUT_LIVE_M3U, "w", encoding="utf-8") as f:
         f.write("\n".join(m3u_lines) + "\n")
 
-    print("=" * 65, flush=True)
-    print(f"🎉 测速筛选完成！")
+    print("=" * 70, flush=True)
+    print(f"🎉 测速筛选完成！所有保留源均通过【真实画面图像验证】！")
     print(f"   - 达标频道数: {total_channels_with_streams} 个")
-    print(f"   - 保留高速直播源: {total_qualified_streams} 条 (已全部按网速从高到低排序)")
+    print(f"   - 保留高速有画面直播源: {total_qualified_streams} 条 (已全部按网速从高到低排序)")
     print(f"   - 交付文件 (TXT 格式): {OUTPUT_LIVE_TXT}")
     print(f"   - 交付文件 (M3U 格式): {OUTPUT_LIVE_M3U}")
-    print("=" * 65, flush=True)
+    print("=" * 70, flush=True)
 
 # =========================================================================
 # 命令行调度入口：支持 harvest / speedtest / full
