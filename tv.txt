@@ -32,7 +32,6 @@
       "quickSearch": 0,
       "filter": false
     },
-
     {
       "key": "非凡资源",
       "name": "非凡",
@@ -288,6 +287,86 @@
       "name": "乐视",
       "type": 1,
       "api": "https://leshiapi.com/api.php/provide/vod/",
+      "playUrl": "",
+      "searchable": 1,
+      "quickSearch": 1,
+      "categories": ["动作片", "喜剧片", "科幻片", "欧美剧", "国产剧", "日韩剧", "动漫", "短剧"]
+    },
+    {
+      "key": "步步高资源",
+      "name": "步步高",
+      "type": 1,
+      "api": "https://api.bbkzy.com/api.php/provide/vod/",
+      "playUrl": "",
+      "searchable": 1,
+      "quickSearch": 1,
+      "categories": ["动作片", "喜剧片", "科幻片", "欧美剧", "国产剧", "日韩剧", "动漫", "短剧"]
+    },
+    {
+      "key": "阿里资源",
+      "name": "阿里",
+      "type": 1,
+      "api": "https://alizy.net/api.php/provide/vod/",
+      "playUrl": "",
+      "searchable": 1,
+      "quickSearch": 1,
+      "categories": ["动作片", "喜剧片", "科幻片", "欧美剧", "国产剧", "日韩剧", "动漫", "短剧"]
+    },
+    {
+      "key": "奇虎资源",
+      "name": "奇虎",
+      "type": 1,
+      "api": "https://caiji.qhzyapi.com/api.php/provide/vod/",
+      "playUrl": "",
+      "searchable": 1,
+      "quickSearch": 1,
+      "categories": ["动作片", "喜剧片", "科幻片", "欧美剧", "国产剧", "日韩剧", "动漫", "短剧"]
+    },
+    {
+      "key": "ikun资源",
+      "name": "iKun",
+      "type": 1,
+      "api": "https://ikunzyapi.com/api.php/provide/vod/",
+      "playUrl": "",
+      "searchable": 1,
+      "quickSearch": 1,
+      "categories": ["动作片", "喜剧片", "科幻片", "欧美剧", "国产剧", "日韩剧", "动漫", "短剧"]
+    },
+    {
+      "key": "飘花资源",
+      "name": "飘花",
+      "type": 1,
+      "api": "http://www.piaohua.com/api.php/provide/vod/",
+      "playUrl": "",
+      "searchable": 1,
+      "quickSearch": 1,
+      "categories": ["动作片", "喜剧片", "科幻片", "欧美剧", "国产剧", "日韩剧", "动漫", "短剧"]
+    },
+    {
+      "key": "影图资源",
+      "name": "影图",
+      "type": 1,
+      "api": "https://cj.vodimg.top/api.php/provide/vod/",
+      "playUrl": "",
+      "searchable": 1,
+      "quickSearch": 1,
+      "categories": ["动作片", "喜剧片", "科幻片", "欧美剧", "国产剧", "日韩剧", "动漫", "短剧"]
+    },
+    {
+      "key": "索尼新源",
+      "name": "索尼(新)",
+      "type": 1,
+      "api": "https://suoniapi.com/api.php/provide/vod/from/snm3u8/",
+      "playUrl": "",
+      "searchable": 1,
+      "quickSearch": 1,
+      "categories": ["动作片", "喜剧片", "科幻片", "欧美剧", "国产剧", "日韩剧", "动漫", "短剧"]
+    },
+    {
+      "key": "淘片新源",
+      "name": "淘片(新)",
+      "type": 1,
+      "api": "https://taopianapi.com/home/cjapi/as/mc10/vod/xml/",
       "playUrl": "",
       "searchable": 1,
       "quickSearch": 1,
