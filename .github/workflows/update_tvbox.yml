@@ -24,7 +24,7 @@ jobs:
 
       - name: Run Check Script
         run: |
-          python scripts/check_and_update.py
+          python check_and_update.py
 
       - name: Commit and Push Changes
         run: |
