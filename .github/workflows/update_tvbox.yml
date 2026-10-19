@@ -1,16 +1,21 @@
-name: TVBox点播源检测
+name: 自动抓包更新点播源
 
 on:
-  workflow_dispatch: # 支持网页端手动点击运行
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: 'ikanbot 影片播放页链接'
+        required: false
+        default: 'https://www1.ikanbot.com/play/995772'
   schedule:
-    - cron: '0 2 * * 1' # 每周一北京时间上午10点运行
+    - cron: '0 2 * * 1'
 
 jobs:
-  check-and-clean:
+  crawl-and-clean:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -20,20 +25,25 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install requests
+          pip install playwright requests
+          playwright install --with-deps chromium
 
-      - name: Run Check Script
+      - name: Run Crawler
+        run: |
+          python crawl_ikanbot.py
+
+      - name: Run Validator and Deduplicate
         run: |
           python check_and_update.py
 
-      - name: Commit and Push Changes
+      - name: Commit and Push
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add tv.txt
           if git diff --staged --quiet; then
-            echo "无变更，所有源状态正常。"
+            echo "无配置变动"
           else
-            git commit -m "Auto: 优化更新 tv.txt 采集源"
+            git commit -m "Auto: 自动嗅探 ikanbot 线路并更新 tv.txt"
             git push
           fi
