@@ -1,0 +1,39 @@
+name: TVBox点播源检测
+
+on:
+  workflow_dispatch: # 支持网页端手动点击运行
+  schedule:
+    - cron: '0 2 * * 1' # 每周一北京时间上午10点运行
+
+jobs:
+  check-and-clean:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          pip install requests
+
+      - name: Run Check Script
+        run: |
+          python scripts/check_and_update.py
+
+      - name: Commit and Push Changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add tv.txt
+          if git diff --staged --quiet; then
+            echo "无变更，所有源状态正常。"
+          else
+            git commit -m "Auto: 优化更新 tv.txt 采集源"
+            git push
+          fi
