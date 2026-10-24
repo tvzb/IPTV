@@ -1,9 +1,6 @@
 name: 电视直播源采集与测速工作流 (IPTV Pipeline)
 
 on:
-  schedule:
-    # 每天 UTC 04:00 与 16:00 (北京时间 12:00 与 00:00) 自动全流程更新
-    - cron: '0 4,16 * * *'
   workflow_dispatch:
     inputs:
       mode:
