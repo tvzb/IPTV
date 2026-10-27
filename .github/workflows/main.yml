@@ -1,0 +1,118 @@
+name: IPTV 五步法自动采集与测速更新
+
+on:
+  # 1. 支持在 GitHub Actions 页面手动点击运行，并可自定义测速门槛
+  workflow_dispatch:
+    inputs:
+      min_speed:
+        description: '最低测速门槛 (KB/s)，默认 200'
+        required: false
+        default: '200'
+
+  # 2. 当修改了脚本或配置文件推送到主分支时自动触发测试
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'main.py'
+      - 'config.py'
+      - '.github/workflows/**'
+
+  # 3. 定时任务：每天北京时间 05:30 和 17:30 (晚间黄金档前) 自动运行
+  #    (GitHub cron 使用 UTC 时间：UTC 21:30 = 北京时间次日 05:30；UTC 09:30 = 北京时间 17:30)
+  schedule:
+    - cron: '30 21 * * *'
+    - cron: '30 9 * * *'
+
+# 并发控制：如果上一次任务还在测速中，新触发的任务将取消旧任务，避免冲突
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# 赋予 Actions 直接向仓库提交并推送更新后直播源文件的权限
+permissions:
+  contents: write
+
+jobs:
+  harvest-and-speedtest:
+    name: 搜索提取 -> 清洗 -> 初测 -> 裂变 -> 终测排序
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    env:
+      # 强制全局时区为北京时间，确保第一步搜索关键词 "更新 YYYY-MM" 及日志时间准确无误
+      TZ: Asia/Shanghai
+      # 强制 Python 实时输出日志，不缓存，方便在 Actions 界面实时查看五步进度
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: 📥 1. 检出仓库代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 🐍 2. 配置 Python 3.11 运行环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 🛠️ 3. 安装 FFmpeg (ffprobe 视频帧探针) 与 Python 依赖
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install requests urllib3
+          fi
+
+      - name: 🚀 4. 执行 IPTV 五步工作流核心脚本
+        env:
+          # 优先使用您在仓库 Secrets 中配置的个人 Token (搜索配额更高)，若未设置则自动回退使用系统默认 GITHUB_TOKEN
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          SPEED_LIMIT="${{ github.event.inputs.min_speed || '200' }}"
+          echo "当前设定最低测速门槛: ${SPEED_LIMIT} KB/s"
+          python main.py "${SPEED_LIMIT}"
+
+      - name: 🔍 5. 校验输出文件完整性 (防空文件保护)
+        id: verify_output
+        run: |
+          if [ ! -s "live.txt" ]; then
+            echo "❌ 错误：生成的 live.txt 为空或不存在，终止提交以保护线上 TVBox 正常观看！"
+            exit 1
+          fi
+          LINE_COUNT=$(wc -l < live.txt)
+          STREAM_COUNT=$(grep -E "^[^#].*,http" live.txt | wc -l || true)
+          echo "✅ 生成校验通过：live.txt 共 ${LINE_COUNT} 行，包含有效高速直播源 ${STREAM_COUNT} 条。"
+          if [ "$STREAM_COUNT" -lt 10 ]; then
+            echo "⚠️ 警告：本次有效源数量过少 (<10条)，跳过覆盖提交以保留上一版可用源！"
+            echo "should_commit=false" >> $GITHUB_OUTPUT
+          else
+            echo "should_commit=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 📤 6. 自动提交并推送最新直播源至仓库
+        if: steps.verify_output.outputs.should_commit == 'true'
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # 先拉取最新远端更改，防止在脚本运行的几分钟内您手动修改了仓库导致 push 冲突
+          git pull --rebase origin ${{ github.ref_name }} || true
+
+          # 添加生成的中间清洗池与最终测速排序结果
+          git add live.txt live.m3u raw_sources.txt raw_sources.m3u 2>/dev/null || git add live.txt live.m3u
+
+          # 检查是否有实质内容变化，有变化才提交
+          if git diff --staged --quiet; then
+            echo "ℹ️ 直播源列表与上一版本完全一致，无需重复提交。"
+          else
+            NOW_TIME=$(date '+%Y-%m-%d %H:%M:%S')
+            git commit -m "chore(live): 自动更新央视与卫视高速直播源 [${NOW_TIME}]"
+            git push origin HEAD:${{ github.ref_name }}
+            echo "🎉 最新 TVBox 直播源已成功推送到仓库！"
+          fi
