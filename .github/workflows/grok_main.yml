@@ -15,15 +15,9 @@ on:
       - main
       - master
     paths:
-      - 'main.py'
-      - 'config.py'
+      - 'grok_main.py'
+      - 'grok_config.py'
       - '.github/workflows/**'
-
-  # 3. 定时任务：每天北京时间 05:30 和 17:30 (晚间黄金档前) 自动运行
-  #    (GitHub cron 使用 UTC 时间：UTC 21:30 = 北京时间次日 05:30；UTC 09:30 = 北京时间 17:30)
-  schedule:
-    - cron: '30 21 * * *'
-    - cron: '30 9 * * *'
 
 # 并发控制：如果上一次任务还在测速中，新触发的任务将取消旧任务，避免冲突
 concurrency:
@@ -77,7 +71,7 @@ jobs:
           SPEED_LIMIT="${{ github.event.inputs.min_speed || '200' }}"
           echo "当前设定最低测速门槛: ${SPEED_LIMIT} KB/s"
           echo "注意：GitHub Actions 跑在海外，测速结果与国内真实盒子会有差异，最终建议在国内再人工抽测。"
-          python main.py "${SPEED_LIMIT}"
+          python grok_main.py "${SPEED_LIMIT}"
 
       - name: 🔍 5. 校验输出文件完整性 (防空文件保护)
         id: verify_output
