@@ -7,7 +7,7 @@ on:
       min_speed:
         description: '最低持续速度门槛 (KB/s)。海外建议 80~150，国内真实盒子建议 180~300。默认 120'
         required: false
-        default: '120'
+        default: '180'
 
   # 2. 当修改了脚本或配置文件推送到主分支时自动触发测试
   push:
