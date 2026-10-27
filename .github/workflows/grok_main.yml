@@ -1,13 +1,13 @@
-name: IPTV grok_五步法自动采集与测速更新（优化版）
+name: IPTV 真实画面优先自动采集与测速（优化版）
 
 on:
   # 1. 支持在 GitHub Actions 页面手动点击运行，并可自定义测速门槛
   workflow_dispatch:
     inputs:
       min_speed:
-        description: '最低测速门槛 (KB/s)，默认 200（国内盒子建议 150~300）'
+        description: '最低持续速度门槛 (KB/s)。海外建议 80~150，国内真实盒子建议 180~300。默认 120'
         required: false
-        default: '200'
+        default: '120'
 
   # 2. 当修改了脚本或配置文件推送到主分支时自动触发测试
   push:
@@ -30,9 +30,9 @@ permissions:
 
 jobs:
   harvest-and-speedtest:
-    name: 搜索提取 → 清洗 → 初测 → 裂变 → 终测排序
+    name: 搜索提取 → 清洗 → 初测 → 裂变 → 真实画面终测排序
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 50
 
     env:
       # 强制全局时区为北京时间，确保第一步搜索关键词 "更新 YYYY-MM" 及日志时间准确无误
@@ -63,15 +63,16 @@ jobs:
             pip install requests urllib3
           fi
 
-      - name: 🚀 4. 执行 IPTV 五步工作流核心脚本
+      - name: 🚀 4. 执行 IPTV 真实画面优先工作流核心脚本
         env:
           # 优先使用您在仓库 Secrets 中配置的个人 Token (搜索配额更高)，若未设置则自动回退使用系统默认 GITHUB_TOKEN
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          SPEED_LIMIT="${{ github.event.inputs.min_speed || '200' }}"
-          echo "当前设定最低测速门槛: ${SPEED_LIMIT} KB/s"
-          echo "注意：GitHub Actions 跑在海外，测速结果与国内真实盒子会有差异，最终建议在国内再人工抽测。"
-          python grok_main.py "${SPEED_LIMIT}"
+          SPEED_LIMIT="${{ github.event.inputs.min_speed || '120' }}"
+          echo "当前设定最低持续速度门槛: ${SPEED_LIMIT} KB/s"
+          echo "注意：GitHub Actions 跑在海外，测速结果与国内真实盒子会有差异。"
+          echo "本次优化已强制验证真实视频画面 + 持续下载，更接近 TVBox 实际观看体验。"
+          python main.py "${SPEED_LIMIT}"
 
       - name: 🔍 5. 校验输出文件完整性 (防空文件保护)
         id: verify_output
@@ -83,8 +84,8 @@ jobs:
           LINE_COUNT=$(wc -l < live.txt)
           STREAM_COUNT=$(grep -E "^[^#].*,http" live.txt | wc -l || true)
           echo "✅ 生成校验通过：live.txt 共 ${LINE_COUNT} 行，包含有效高速直播源 ${STREAM_COUNT} 条。"
-          if [ "$STREAM_COUNT" -lt 10 ]; then
-            echo "⚠️ 警告：本次有效源数量过少 (<10条)，跳过覆盖提交以保留上一版可用源！"
+          if [ "$STREAM_COUNT" -lt 8 ]; then
+            echo "⚠️ 警告：本次有效源数量过少 (<8条)，跳过覆盖提交以保留上一版可用源！"
             echo "should_commit=false" >> $GITHUB_OUTPUT
           else
             echo "should_commit=true" >> $GITHUB_OUTPUT
@@ -107,7 +108,7 @@ jobs:
             echo "ℹ️ 直播源列表与上一版本完全一致，无需重复提交。"
           else
             NOW_TIME=$(date '+%Y-%m-%d %H:%M:%S')
-            git commit -m "chore(live): 自动更新央视与卫视高速直播源 [${NOW_TIME}]"
+            git commit -m "chore(live): 真实画面优先更新央视与卫视可流畅播放源 [${NOW_TIME}]"
             git push origin HEAD:${{ github.ref_name }}
             echo "🎉 最新 TVBox 直播源已成功推送到仓库！"
           fi
