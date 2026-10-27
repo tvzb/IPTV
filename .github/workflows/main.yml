@@ -19,12 +19,6 @@ on:
       - 'config.py'
       - '.github/workflows/**'
 
-  # 3. 定时任务：每天北京时间 05:30 和 17:30 (晚间黄金档前) 自动运行
-  #    (GitHub cron 使用 UTC 时间：UTC 21:30 = 北京时间次日 05:30；UTC 09:30 = 北京时间 17:30)
-  schedule:
-    - cron: '30 21 * * *'
-    - cron: '30 9 * * *'
-
 # 并发控制：如果上一次任务还在测速中，新触发的任务将取消旧任务，避免冲突
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
