@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-配置模块：目标频道、标准化清洗、种子裂变（数字序号+字母标识）、广播剔除、运行参数
-支持加载用户自定义 channels.json
+配置模块：目标频道、标准化清洗、种子裂变、广播剔除、运行参数
+真实画面优先优化版
 """
 import os
 import re
@@ -71,6 +71,7 @@ DEFAULT_SATELLITE_CHANNELS = [
 ]
 
 ALL_DEFAULT_TARGETS = DEFAULT_CCTV_CHANNELS + DEFAULT_SATELLITE_CHANNELS
+
 
 def load_user_channel_structure(config_file: str = "channels.json") -> Dict[str, List[str]]:
     """加载用户自定义的分类与频道列表；不存在则使用默认央视+卫视"""
@@ -165,7 +166,6 @@ def is_radio_source(name: str, url: str = "") -> bool:
     for kw in radio_keywords:
         if kw in name_lower:
             return True
-    # URL 中常见纯音频特征
     if url and re.search(r'(radio|fm\d+|am\d+|audio)', url, re.IGNORECASE):
         return True
     return False
@@ -177,13 +177,11 @@ def normalize_channel_name(raw_name: str) -> str:
         return ""
     clean_name = raw_name.strip()
 
-    # 严格排除 CCTV-5+ 和广播
     if re.search(r'(?i)cctv[-_ ]?5\+', clean_name):
         return ""
     if is_radio_source(clean_name):
         return ""
 
-    # 1. 匹配 CCTV-1 至 CCTV-17
     cctv_match = re.search(r'(?i)cctv[-_ ]?(\d{1,2})', clean_name)
     if cctv_match:
         num = int(cctv_match.group(1))
@@ -193,7 +191,6 @@ def normalize_channel_name(raw_name: str) -> str:
                 if std_cctv.startswith(prefix):
                     return std_cctv
 
-    # 2. 匹配省级卫视
     for sat in DEFAULT_SATELLITE_CHANNELS:
         keyword = sat.replace("卫视", "")
         if keyword in clean_name and ("卫视" in clean_name or sat in clean_name or "台" in clean_name):
@@ -233,7 +230,7 @@ def extrapolate_channels_from_seed(seed_url: str) -> List[Tuple[str, str]]:
     if not clean_seed:
         return results
 
-    # === 模式 A：四位/三位数字序号加后缀规律（如 0001_1.m3u8, 0001.m3u8, 001.m3u8） ===
+    # === 模式 A：四位/三位数字序号加后缀规律 ===
     num_seq_match = re.search(r'([/_])(0*(\d{1,4}))(_\d+)?(\.m3u8|\.ts|\.flv)', clean_seed, re.IGNORECASE)
     if num_seq_match:
         delimiter = num_seq_match.group(1)
@@ -279,7 +276,7 @@ def extrapolate_channels_from_seed(seed_url: str) -> List[Tuple[str, str]]:
                 results.append((std_sat, extrapolated_url))
         return results
 
-    # === 模式 C：卫视拼音别名标识规律（如 hunan.m3u8） ===
+    # === 模式 C：卫视拼音别名标识规律 ===
     for std_ch, slugs in CHANNEL_SLUGS.items():
         for slug in slugs:
             pattern = re.search(rf'({re.escape(slug)})([a-zA-Z0-9_\-]*)(\.m3u8|\.flv|\.ts)', clean_seed, re.IGNORECASE)
@@ -304,12 +301,24 @@ RAW_SOURCES_M3U = "raw_sources.m3u"
 OUTPUT_LIVE_TXT = "live.txt"
 OUTPUT_LIVE_M3U = "live.m3u"
 
-# 默认测速门槛（KB/s）。国内真实盒子建议 150~300，海外 Actions 可适当放宽
-MIN_SPEED_KBS = float(os.environ.get("MIN_SPEED_KBS", 200.0))
+# ==================== 真实画面优先测速参数 ====================
+# 默认测速门槛（KB/s）。海外 Actions 建议 80~150，国内盒子建议 180~300
+# 可通过环境变量或命令行覆盖
+MIN_SPEED_KBS = float(os.environ.get("MIN_SPEED_KBS", 120.0))
+
+# 最低有效视频画面高度（像素）。低于此值视为无真实可用画面
+MIN_VIDEO_HEIGHT = int(os.environ.get("MIN_VIDEO_HEIGHT", 360))
+
+# 持续速度稳定性要求（预留，当前主要用于未来扩展）
+SUSTAINED_SPEED_RATIO = float(os.environ.get("SUSTAINED_SPEED_RATIO", 0.6))
+
 TVBOX_USER_AGENT = "okhttp/3.12.1"
-REQUEST_TIMEOUT = 5.0
-CHUNK_DOWNLOAD_TIMEOUT = 2.5
-CHUNK_DOWNLOAD_MAX_BYTES = 512 * 1024
-MAX_WORKERS = 32
-TARGET_PER_CHANNEL_RAW = 60
-MAX_SAME_IP_PER_CHANNEL = 2
+REQUEST_TIMEOUT = 6.0
+
+# 持续下载探针时间与体积（更接近真实播放缓冲）
+CHUNK_DOWNLOAD_TIMEOUT = 4.5          # 最长下载时间（秒）
+CHUNK_DOWNLOAD_MAX_BYTES = 768 * 1024 # 最大下载体积（约 0.75MB）
+
+MAX_WORKERS = 28                      # 适当降低并发，减少对目标服务器压力
+TARGET_PER_CHANNEL_RAW = 50           # 原始候选池每频道上限
+MAX_SAME_IP_PER_CHANNEL = 2           # 同 IP 防独占

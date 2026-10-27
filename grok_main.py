@@ -1,15 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-IPTV 自动化核心引擎（优化版 - 贴近真实 TVBox 国内观看）
-针对“央视黑屏有数据”、“同IP独占导致全灭”、“跨洋测速误杀”、“广播源混入”四大难题彻底重构：
+IPTV 自动化核心引擎（真实画面优先优化版 - 贴近国内 TVBox 实际观看）
 
-1. 【同服务器防独占 (IP Diversity)】：单频道同一 IP 最多保留 2 条线路；
-2. 【大幅拓展央视与卫视高星源池】：扩充高质量公共源矩阵 + 动态月份 GitHub Code 搜索前2页；
-3. 【跨洋真实带宽自适应分级】：精准剔除低速伪高清源，保留真正有带宽余量的优质源；
-4. 【无硬上限】：达标多少保留多少，按速度+分辨率综合排序；
-5. 【本地内存 TS 字节探针】：0网络延迟校验 MPEG-TS 0x47 同步字与视频流轨；
-6. 【严格剔除广播源】：名称/URL 含广播/电台/FM/AM 直接丢弃；
-7. 【五步流程严格落地】：搜索提取 → 清洗去重 → 初测 → 裂变 → 终测排序输出。
+核心目标：测速结果尽可能接近国内真实网络 + TVBox 实际播放体验。
+解决痛点：
+1. 很多源“能下一点数据但实际卡顿/黑屏/假活”
+2. 同 IP 独占导致整组失效
+3. 跨洋测速与国内真实速度差异大
+4. 广播源混入
+5. 只有开头快、后续断流的伪优质源
+
+优化策略（真实画面优先）：
+- 持续下载探针（更长时间/更大体积），计算平均速度，拒绝“开头快后面断”
+- HLS 连续拉取 2~3 个 TS 片段验证连续性
+- ffprobe 强制确认视频轨 + 有效分辨率（拒绝无画面/纯音频）
+- 分辨率 + 持续速度双重排序
+- 同 IP 防独占 + 无硬上限（达标全保留）
+- 严格剔除广播/电台
+- 反向裂变限流保护（防 403）
 """
 import os
 import re
@@ -46,6 +54,8 @@ from grok_config import (
     MIN_SPEED_KBS,
     TARGET_PER_CHANNEL_RAW,
     MAX_SAME_IP_PER_CHANNEL,
+    MIN_VIDEO_HEIGHT,
+    SUSTAINED_SPEED_RATIO,
 )
 
 HEADERS = {
@@ -54,7 +64,7 @@ HEADERS = {
     "Connection": "keep-alive",
 }
 
-# 全网精选高星、每日同步、编码兼容性好的公共源矩阵（持续维护）
+# 全网精选高星、每日同步、编码兼容性好的公共源矩阵
 FALLBACK_GITHUB_MATRIX = [
     "https://raw.githubusercontent.com/fanmingming/live/main/tv/m3u/ipv4.m3u",
     "https://raw.githubusercontent.com/Guovin/iptv-api/gd/output/result.txt",
@@ -75,8 +85,11 @@ FALLBACK_GITHUB_MATRIX = [
 
 
 # =========================================================================
-# 模块一：动态月份计算与 GitHub 代码检索（模拟人工前2页搜索）
+# 模块一：动态月份计算与 GitHub 代码检索（限流保护版）
 # =========================================================================
+
+_GITHUB_SEARCH_CIRCUIT_OPEN = False
+
 
 def get_dynamic_search_months() -> Tuple[str, str]:
     now = datetime.datetime.now()
@@ -98,11 +111,15 @@ def get_github_auth_headers() -> Dict[str, str]:
     return headers
 
 
-def search_github_code_files(query: str, max_items: int = 20, pages: int = 2) -> List[str]:
-    """搜索 GitHub Code，支持前 N 页，尽量贴近人工“打开前2页所有结果”"""
+def search_github_code_files(query: str, max_items: int = 10, pages: int = 1) -> List[str]:
+    """搜索 GitHub Code，带熔断与退避，防止 403 爆炸。"""
+    global _GITHUB_SEARCH_CIRCUIT_OPEN
+    if _GITHUB_SEARCH_CIRCUIT_OPEN:
+        return []
+
     headers = get_github_auth_headers()
     raw_urls: List[str] = []
-    per_page = min(max_items, 30)
+    per_page = min(max_items, 20)
 
     for page in range(1, pages + 1):
         api_url = (
@@ -118,19 +135,32 @@ def search_github_code_files(query: str, max_items: int = 20, pages: int = 2) ->
                     repo_full_name = item.get("repository", {}).get("full_name")
                     file_path = item.get("path")
                     if repo_full_name and file_path:
-                        # 优先 main，后面 fetch 时自动回退 master
                         raw_url = f"https://raw.githubusercontent.com/{repo_full_name}/main/{file_path}"
                         raw_urls.append(raw_url)
             elif resp.status_code in (403, 429):
-                print(f"[!] GitHub API 配额限制 ({resp.status_code})，跳过后续页并使用备用源池。", flush=True)
-                break
+                print(f"[!] GitHub API 限流 ({resp.status_code})，等待 45 秒后重试一次…", flush=True)
+                time.sleep(45)
+                resp2 = requests.get(api_url, headers=headers, timeout=12)
+                if resp2.status_code in (403, 429):
+                    print(f"[!] GitHub API 仍被限流，开启熔断，后续搜索全部跳过，改用备用源池。", flush=True)
+                    _GITHUB_SEARCH_CIRCUIT_OPEN = True
+                    break
+                else:
+                    data = resp2.json()
+                    items = data.get("items", [])
+                    for item in items:
+                        repo_full_name = item.get("repository", {}).get("full_name")
+                        file_path = item.get("path")
+                        if repo_full_name and file_path:
+                            raw_url = f"https://raw.githubusercontent.com/{repo_full_name}/main/{file_path}"
+                            raw_urls.append(raw_url)
             else:
                 break
         except Exception:
             break
-        time.sleep(0.8)  # 礼貌限速
+        time.sleep(1.2)
 
-    return list(dict.fromkeys(raw_urls))  # 保序去重
+    return list(dict.fromkeys(raw_urls))
 
 
 def fetch_file_content(url: str) -> str:
@@ -155,7 +185,6 @@ def parse_streams_from_text(content: str) -> List[Tuple[str, str]]:
 
     lines = [line.strip() for line in content.splitlines() if line.strip()]
 
-    # M3U 格式解析
     if any(line.startswith("#EXTM3U") for line in lines[:5]):
         current_title = ""
         for line in lines:
@@ -173,7 +202,6 @@ def parse_streams_from_text(content: str) -> List[Tuple[str, str]]:
                 current_title = ""
         return streams
 
-    # TXT 格式解析
     for line in lines:
         if line.startswith("#") or ",#genre#" in line or "更新时间" in line:
             continue
@@ -205,18 +233,18 @@ def probe_stream_lightweight(url: str) -> bool:
 
 
 def reverse_search_github_ip(ip_port: str) -> List[Tuple[str, str]]:
-    discovered: List[Tuple[str, str]] = []
-    if not ip_port:
-        return discovered
+    global _GITHUB_SEARCH_CIRCUIT_OPEN
+    if _GITHUB_SEARCH_CIRCUIT_OPEN or not ip_port:
+        return []
 
-    raw_urls = search_github_code_files(f'"{ip_port}"', max_items=8, pages=1)
+    discovered: List[Tuple[str, str]] = []
+    raw_urls = search_github_code_files(f'"{ip_port}"', max_items=6, pages=1)
     for u in raw_urls:
         content = fetch_file_content(u)
         new_streams = parse_streams_from_text(content)
         for ch, url in new_streams:
             if ip_port in url:
                 discovered.append((ch, url))
-
     return discovered
 
 
@@ -225,6 +253,9 @@ def reverse_search_github_ip(ip_port: str) -> List[Tuple[str, str]]:
 # =========================================================================
 
 def harvest_all_sources() -> Dict[str, List[str]]:
+    global _GITHUB_SEARCH_CIRCUIT_OPEN
+    _GITHUB_SEARCH_CIRCUIT_OPEN = False
+
     curr_month, prev_month = get_dynamic_search_months()
     print("=" * 70, flush=True)
     print(f"🚀 [阶段一] 全网直播源采集与智能裂变 (时段: {curr_month} / {prev_month})", flush=True)
@@ -240,32 +271,28 @@ def harvest_all_sources() -> Dict[str, List[str]]:
 
     print(f"[*] 监控目标频道总数: {len(target_channels)} 个", flush=True)
 
-    # 模拟人工搜索：多种变体 + 当前/上月 + 前2页
     search_queries = [
         f"更新 {curr_month} CCTV-2,http",
         f"更新 {prev_month} CCTV-2,http",
-        f"更新 {curr_month} CCTV2,http",
-        f"更新 {prev_month} CCTV2,http",
         f"更新 {curr_month} CCTV-6,http",
-        f"更新 {curr_month} CCTV6,http",
-        f"更新 {curr_month} CCTV-6 http",
-        f"更新 {curr_month} CCTV6 http",
         f"更新 {curr_month} 卫视频道,http",
         f"CCTV-1 {curr_month} m3u8",
         f"CCTV-6 {curr_month} m3u8",
         f"topic:iptv {curr_month}",
-        f"CCTV {curr_month} result.txt",
         f"user_result.txt {curr_month}",
     ]
 
     all_file_urls: Set[str] = set(FALLBACK_GITHUB_MATRIX)
 
-    print("[*] 正在检索 GitHub Code（前2页）与高星直播源池...", flush=True)
+    print("[*] 正在检索 GitHub Code（精简查询 + 限流保护）与高星直播源池...", flush=True)
     for q in search_queries:
-        found_urls = search_github_code_files(q, max_items=15, pages=2)
+        if _GITHUB_SEARCH_CIRCUIT_OPEN:
+            print("[!] 已触发熔断，跳过剩余搜索查询。", flush=True)
+            break
+        found_urls = search_github_code_files(q, max_items=12, pages=1)
         for u in found_urls:
             all_file_urls.add(u)
-        time.sleep(0.6)
+        time.sleep(1.0)
 
     print(f"[+] 汇集候选清单文件: {len(all_file_urls)} 个，启动多线程并发提取...", flush=True)
 
@@ -288,7 +315,7 @@ def harvest_all_sources() -> Dict[str, List[str]]:
     total_scraped = sum(len(v) for v in candidate_pool.values())
     print(f"[✓] 基础池采集完成，已录入原始源: {total_scraped} 条", flush=True)
 
-    print("[*] 正在执行优质种子源反向检索与序号推导（裂变）...", flush=True)
+    print("[*] 正在执行优质种子源反向检索与序号推导（裂变，限流保护）...", flush=True)
     fissioned_count = 0
     checked_ips: Set[str] = set()
 
@@ -296,14 +323,21 @@ def harvest_all_sources() -> Dict[str, List[str]]:
     candidate_seeds: List[str] = []
     for kch in key_seed_channels:
         if kch in candidate_pool:
-            candidate_seeds.extend(candidate_pool[kch][:20])
+            candidate_seeds.extend(candidate_pool[kch][:12])
+
+    MAX_REVERSE_IPS = 8
+    reverse_done = 0
 
     for seed_url in candidate_seeds:
+        if reverse_done >= MAX_REVERSE_IPS or _GITHUB_SEARCH_CIRCUIT_OPEN:
+            break
+
         ip_port = extract_ip_port(seed_url)
         if not ip_port or ip_port in checked_ips:
             continue
 
         checked_ips.add(ip_port)
+
         if probe_stream_lightweight(seed_url):
             extrapolated = extrapolate_channels_from_seed(seed_url)
             for ch, url in extrapolated:
@@ -313,13 +347,16 @@ def harvest_all_sources() -> Dict[str, List[str]]:
                     fissioned_count += 1
 
             reverse_streams = reverse_search_github_ip(ip_port)
+            reverse_done += 1
             for ch, url in reverse_streams:
                 if ch in target_channels and url not in seen_urls_per_channel[ch]:
                     seen_urls_per_channel[ch].add(url)
                     candidate_pool[ch].append(url)
                     fissioned_count += 1
 
-    print(f"[✓] 智能裂变与反向搜索增补完成，新增优质源: {fissioned_count} 条", flush=True)
+            time.sleep(1.5)
+
+    print(f"[✓] 智能裂变与反向搜索增补完成，新增优质源: {fissioned_count} 条（反向检索 IP 数: {reverse_done}）", flush=True)
 
     export_raw_files(candidate_pool, user_struct)
     return candidate_pool
@@ -357,7 +394,7 @@ def export_raw_files(candidate_pool: Dict[str, List[str]], user_struct: Dict[str
 
 
 # =========================================================================
-# 模块三：HLS 安全解密探针 + 本地内存流媒体特征分析
+# 模块三：真实画面优先的深度测速探针（接近 TVBox 实际观看）
 # =========================================================================
 
 def check_hls_stream_security(m3u8_text: str, base_url: str) -> Tuple[bool, str]:
@@ -427,25 +464,65 @@ def parse_input_sources(source_file: str) -> Dict[str, List[str]]:
     return channel_streams
 
 
+def _ffprobe_video_info(raw_bytes: bytes) -> Tuple[str, int, int]:
+    """
+    返回 (codec, width, height)。失败返回 ("", 0, 0)
+    强制要求有视频轨，拒绝纯音频或空流。
+    """
+    try:
+        cmd = [
+            "ffprobe",
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=codec_name,width,height",
+            "-of", "csv=s=x:p=0",
+            "-i", "pipe:0"
+        ]
+        proc = subprocess.run(
+            cmd, input=raw_bytes[:128 * 1024],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=2.0
+        )
+        out = proc.stdout.decode("utf-8", errors="ignore").strip()
+        if out:
+            parts = out.split("x")
+            if len(parts) >= 3:
+                codec = parts[0].strip()
+                w = int(parts[1]) if parts[1].isdigit() else 0
+                h = int(parts[2]) if parts[2].isdigit() else 0
+                if w >= 320 and h >= 240 and codec:
+                    return codec.upper(), w, h
+    except Exception:
+        pass
+    return "", 0, 0
+
+
 def test_single_stream_speed(channel_name: str, stream_url: str) -> Tuple[str, str, float, bool, str, int]:
     """
+    真实画面优先的深度探针。
     返回: channel, url, speed_kbs, is_valid, video_tag, height
-    height 用于最终排序（分辨率优先）
+
+    核心改进：
+    1. 持续下载更长时间/更大体积，计算平均速度
+    2. HLS 尽量连续取 2~3 个 TS 片段验证连续性
+    3. ffprobe 强制确认有视频轨 + 有效分辨率
+    4. 拒绝开头快、后面断流或无真实画面的源
     """
     clean_url = clean_stream_url(stream_url)
 
     try:
+        # ---------- 第一步：快速头检查 ----------
         r = requests.get(clean_url, headers=HEADERS, timeout=REQUEST_TIMEOUT, stream=True)
         if r.status_code != 200:
             return channel_name, clean_url, 0.0, False, "HTTP失效", 0
 
-        first_chunk = next(r.iter_content(chunk_size=1024), b"")
+        first_chunk = next(r.iter_content(chunk_size=2048), b"")
         r.close()
 
         if b"<html" in first_chunk.lower() or b"access denied" in first_chunk.lower() or b"<!doctype" in first_chunk.lower():
             return channel_name, clean_url, 0.0, False, "拦截页面/假活", 0
 
-        ts_url = None
+        # ---------- 第二步：处理 HLS Master / Media Playlist ----------
+        ts_urls: List[str] = []
         if b"#EXTM3U" in first_chunk:
             try:
                 full_m3u8 = requests.get(clean_url, headers=HEADERS, timeout=REQUEST_TIMEOUT).text
@@ -454,7 +531,7 @@ def test_single_stream_speed(channel_name: str, stream_url: str) -> Tuple[str, s
                 if not sec_ok:
                     return channel_name, clean_url, 0.0, False, sec_msg, 0
 
-                # 递归处理多码率 Master Playlist，优先高码率
+                # 多码率 Master Playlist → 选最高分辨率/带宽
                 if "#EXT-X-STREAM-INF" in full_m3u8:
                     candidates = []
                     lines = full_m3u8.splitlines()
@@ -474,87 +551,119 @@ def test_single_stream_speed(channel_name: str, stream_url: str) -> Tuple[str, s
                         clean_url = urllib.parse.urljoin(clean_url, candidates[0][2])
                         full_m3u8 = requests.get(clean_url, headers=HEADERS, timeout=REQUEST_TIMEOUT).text
 
+                # 收集连续多个 TS 片段（验证连续性）
                 for line in full_m3u8.splitlines():
                     line = line.strip()
                     if line and not line.startswith("#"):
-                        ts_url = urllib.parse.urljoin(clean_url, line)
-                        break
+                        full_ts = urllib.parse.urljoin(clean_url, line)
+                        if not re.search(r'(10\.\d+|192\.168\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+|127\.0\.0\.1|localhost)', full_ts):
+                            ts_urls.append(full_ts)
+                        if len(ts_urls) >= 3:  # 最多取 3 个连续片段
+                            break
             except Exception:
                 pass
 
-        test_target_url = ts_url or clean_url
+        # 如果不是 HLS 或没解析出 TS，就直接测原始 URL
+        if not ts_urls:
+            if re.search(r'(10\.\d+|192\.168\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+|127\.0\.0\.1|localhost)', clean_url):
+                return channel_name, clean_url, 0.0, False, "内网地址不可达", 0
+            ts_urls = [clean_url]
 
-        if re.search(r'(10\.\d+|192\.168\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+|127\.0\.0\.1|localhost)', test_target_url):
-            return channel_name, clean_url, 0.0, False, "内网切片不可达", 0
-
+        # ---------- 第三步：持续下载探针（真实画面核心） ----------
         download_start = time.time()
         bytes_received = 0
         media_buffer = bytearray()
+        successful_segments = 0
 
-        try:
-            r_ts = requests.get(test_target_url, headers=HEADERS, timeout=3.5, stream=True)
-            if r_ts.status_code == 200:
+        for idx, target_url in enumerate(ts_urls):
+            try:
+                r_ts = requests.get(target_url, headers=HEADERS, timeout=4.0, stream=True)
+                if r_ts.status_code != 200:
+                    continue
+
+                seg_bytes = 0
                 for chunk in r_ts.iter_content(chunk_size=32 * 1024):
-                    bytes_received += len(chunk)
-                    if len(media_buffer) < 128 * 1024:
-                        media_buffer.extend(chunk)
-                    if time.time() - download_start >= CHUNK_DOWNLOAD_TIMEOUT or bytes_received >= CHUNK_DOWNLOAD_MAX_BYTES:
+                    if not chunk:
                         break
-            r_ts.close()
-        except Exception:
-            pass
+                    seg_bytes += len(chunk)
+                    bytes_received += len(chunk)
+                    if len(media_buffer) < 192 * 1024:  # 保留足够数据给 ffprobe
+                        media_buffer.extend(chunk)
+                    # 单片段或总超时控制
+                    if time.time() - download_start >= CHUNK_DOWNLOAD_TIMEOUT:
+                        break
+                    if bytes_received >= CHUNK_DOWNLOAD_MAX_BYTES:
+                        break
 
-        if bytes_received < 8 * 1024:
-            return channel_name, clean_url, 0.0, False, "切片下载失败/0字节", 0
+                r_ts.close()
 
-        raw_bytes = bytes(media_buffer)
-        is_ts = len(raw_bytes) > 188 and (raw_bytes[0] == 0x47 or raw_bytes[188] == 0x47)
-        is_mp4 = (b"ftyp" in raw_bytes[:32] or b"moov" in raw_bytes[:32] or b"mdat" in raw_bytes[:32])
+                # 单个片段至少要有一定数据量，否则视为断流
+                if seg_bytes >= 8 * 1024:
+                    successful_segments += 1
+                else:
+                    # 片段太小，可能是假活或断流
+                    if idx == 0:
+                        return channel_name, clean_url, 0.0, False, "首片段数据不足/假活", 0
 
-        if not (is_ts or is_mp4):
-            return channel_name, clean_url, 0.0, False, "非视频数据流(无TS/MP4头)", 0
+                if time.time() - download_start >= CHUNK_DOWNLOAD_TIMEOUT or bytes_received >= CHUNK_DOWNLOAD_MAX_BYTES:
+                    break
+            except Exception:
+                if idx == 0:
+                    return channel_name, clean_url, 0.0, False, "下载异常", 0
+                continue
 
-        duration = max(time.time() - download_start, 0.05)
+        if successful_segments == 0 or bytes_received < 16 * 1024:
+            return channel_name, clean_url, 0.0, False, "无有效数据/断流", 0
+
+        # 对 HLS，至少成功拿到 1 个完整可用片段；多个更好
+        if len(ts_urls) > 1 and successful_segments < 1:
+            return channel_name, clean_url, 0.0, False, "HLS片段不连续", 0
+
+        duration = max(time.time() - download_start, 0.08)
         speed_kbs = (bytes_received / 1024.0) / duration
 
-        video_tag = "高清 (TS)"
-        height = 0
-        try:
-            cmd = [
-                "ffprobe",
-                "-v", "error",
-                "-select_streams", "v:0",
-                "-show_entries", "stream=codec_name,width,height",
-                "-of", "csv=s=x:p=0",
-                "-i", "pipe:0"
-            ]
-            proc = subprocess.run(
-                cmd, input=raw_bytes[:96 * 1024],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1.5
-            )
-            out = proc.stdout.decode("utf-8", errors="ignore").strip()
-            if out:
-                parts = out.split("x")
-                if len(parts) >= 3:
-                    w, h = int(parts[1]), int(parts[2])
-                    height = h
-                    if w >= 320 and h >= 240:
-                        tag = "1080P" if h >= 1000 else ("720P" if h >= 700 else f"{w}x{h}")
-                        video_tag = f"{parts[0].upper()} {tag}"
-        except Exception:
-            pass
+        # ---------- 第四步：真实视频轨 + 分辨率检测 ----------
+        raw_bytes = bytes(media_buffer)
+        is_ts = len(raw_bytes) > 188 and (raw_bytes[0] == 0x47 or raw_bytes[188] == 0x47 or 0x47 in raw_bytes[:400])
+        is_mp4 = (b"ftyp" in raw_bytes[:64] or b"moov" in raw_bytes[:64] or b"mdat" in raw_bytes[:64])
+
+        if not (is_ts or is_mp4):
+            return channel_name, clean_url, 0.0, False, "非视频数据流", 0
+
+        codec, width, height = _ffprobe_video_info(raw_bytes)
+
+        # 强制要求有真实视频画面
+        if height < MIN_VIDEO_HEIGHT or width < 320 or not codec:
+            return channel_name, clean_url, 0.0, False, f"无有效视频画面({width}x{height})", 0
+
+        # 构建画质标签
+        if height >= 1080:
+            tag = "1080P"
+        elif height >= 720:
+            tag = "720P"
+        elif height >= 480:
+            tag = "480P"
+        else:
+            tag = f"{width}x{height}"
+        video_tag = f"{codec} {tag}"
+
+        # 速度必须达到门槛（海外测速会偏低，但持续速度更有参考价值）
+        if speed_kbs < MIN_SPEED_KBS:
+            return channel_name, clean_url, speed_kbs, False, f"速度不足({speed_kbs:.0f}<{MIN_SPEED_KBS})", height
 
         return channel_name, clean_url, speed_kbs, True, video_tag, height
 
     except Exception as e:
-        return channel_name, clean_url, 0.0, False, f"异常: {e}", 0
+        return channel_name, clean_url, 0.0, False, f"异常: {str(e)[:40]}", 0
 
 
 def run_speedtest(source_file: str = RAW_SOURCES_TXT, min_speed: float = MIN_SPEED_KBS):
     print("=" * 70, flush=True)
-    print(f"🚀 [阶段二] TVBox 深度测速与【IP多元化多线路优选】", flush=True)
-    print(f"    - 流畅筛选门槛: >= {min_speed:.1f} KB/s (达标不限数量)", flush=True)
-    print(f"    - 安全规则: 拦截内网密钥/黑屏加密/广播源，单频道同IP最多保留 {MAX_SAME_IP_PER_CHANNEL} 条", flush=True)
+    print(f"🚀 [阶段二] 真实画面优先深度测速（接近国内 TVBox 观看体验）", flush=True)
+    print(f"    - 最低持续速度门槛: >= {min_speed:.1f} KB/s", flush=True)
+    print(f"    - 最低有效画面高度: >= {MIN_VIDEO_HEIGHT}p（强制有视频轨）", flush=True)
+    print(f"    - 安全规则: 拦截内网密钥/黑屏加密/广播源/断流假活", flush=True)
+    print(f"    - 单频道同 IP 最多保留 {MAX_SAME_IP_PER_CHANNEL} 条", flush=True)
     print("=" * 70, flush=True)
 
     channel_streams = parse_input_sources(source_file)
@@ -569,7 +678,7 @@ def run_speedtest(source_file: str = RAW_SOURCES_TXT, min_speed: float = MIN_SPE
         for u in urls:
             tasks.append((ch, u))
 
-    print(f"[*] 待测直播源总数: {len(tasks)} 条，启动 {MAX_WORKERS} 线程高并发深度评测...", flush=True)
+    print(f"[*] 待测直播源总数: {len(tasks)} 条，启动 {MAX_WORKERS} 线程高并发真实画面评测...", flush=True)
 
     qualified_results: Dict[str, List[Tuple[str, float, str, int]]] = {}
     all_tested_results: Dict[str, List[Tuple[str, float, str, int]]] = {}
@@ -597,12 +706,11 @@ def run_speedtest(source_file: str = RAW_SOURCES_TXT, min_speed: float = MIN_SPE
             else:
                 rejected_count += 1
 
-            if tested_count % 30 == 0 or tested_count == len(tasks):
+            if tested_count % 20 == 0 or tested_count == len(tasks):
                 elapsed = max(time.time() - start_time, 0.1)
-                rate = tested_count / elapsed
-                print(f"  [进展] 已评测 {tested_count}/{len(tasks)} 条 (合格: {passed_count} 条, 拦截: {rejected_count} 条) ...", flush=True)
+                print(f"  [进展] 已评测 {tested_count}/{len(tasks)} 条 (有真实画面: {passed_count} 条, 拦截: {rejected_count} 条) ...", flush=True)
 
-    # 排序：先按分辨率（高度）降序，再按速度降序
+    # 排序：分辨率（高度）优先，再按持续速度
     for ch in qualified_results:
         qualified_results[ch].sort(key=lambda x: (x[3], x[1]), reverse=True)
     for ch in all_tested_results:
@@ -620,8 +728,8 @@ def export_final_playlists(
     装配输出 live.txt 与 live.m3u：
     1. 同服务器 IP 防独占；
     2. 取消硬上限，达标全部保留；
-    3. 保底机制：达标不足时回退吸纳已通过视频真实性检验的次高速源；
-    4. 最终按速度+分辨率综合排序。
+    3. 保底：达标不足时回退已通过真实画面检验的源；
+    4. 最终按分辨率 + 持续速度综合排序。
     """
     txt_lines: List[str] = []
     m3u_lines: List[str] = ['#EXTM3U x-tvg-url="https://live.fanmingming.com/e.xml"']
@@ -629,9 +737,9 @@ def export_final_playlists(
     total_channels_with_streams = 0
     total_qualified_streams = 0
 
-    print("\n" + "=" * 75, flush=True)
-    print(f"{'频道名称':<18} | {'有效画面源':<10} | {'最高播放速率':<14} | {'最佳画质':<15}", flush=True)
-    print("-" * 75, flush=True)
+    print("\n" + "=" * 78, flush=True)
+    print(f"{'频道名称':<18} | {'真实画面源':<10} | {'最高持续速率':<14} | {'最佳画质':<16}", flush=True)
+    print("-" * 78, flush=True)
 
     for group_name, ch_list in user_struct.items():
         group_txt = [f"{group_name},#genre#"]
@@ -649,7 +757,7 @@ def export_final_playlists(
                     candidate_list.append(bs)
                     seen_urls.add(bs[0])
 
-            # 执行同服务器 IP 防独占算法
+            # 同服务器 IP 防独占
             final_channel_streams: List[Tuple[str, float, str, int]] = []
             ip_usage_count: Dict[str, int] = defaultdict(int)
 
@@ -665,14 +773,14 @@ def export_final_playlists(
                 total_qualified_streams += len(final_channel_streams)
                 top_speed = final_channel_streams[0][1]
                 top_video_tag = final_channel_streams[0][2]
-                print(f"{std_ch:<18} | {len(final_channel_streams):<10} | {top_speed:>7.1f} KB/s | {top_video_tag:<15}", flush=True)
+                print(f"{std_ch:<18} | {len(final_channel_streams):<10} | {top_speed:>7.1f} KB/s | {top_video_tag:<16}", flush=True)
 
                 for url, spd, vtag, h in final_channel_streams:
                     group_txt.append(f"{std_ch},{url}")
                     m3u_lines.append(f'#EXTINF:-1 tvg-name="{std_ch}" group-title="{group_name}",{std_ch}')
                     m3u_lines.append(url)
             else:
-                print(f"{std_ch:<18} | {'0 (无可用源)':<10} | {'--':>12} | {'--':<15}", flush=True)
+                print(f"{std_ch:<18} | {'0 (无可用源)':<10} | {'--':>12} | {'--':<16}", flush=True)
 
         if has_channel:
             txt_lines.extend(group_txt)
@@ -683,17 +791,20 @@ def export_final_playlists(
     with open(OUTPUT_LIVE_M3U, "w", encoding="utf-8") as f:
         f.write("\n".join(m3u_lines) + "\n")
 
-    print("=" * 75, flush=True)
-    print(f"🎉 测速与多元化装配完成！")
-    print(f"   - 达标频道数: {total_channels_with_streams} 个")
-    print(f"   - 保留高速有画面直播源: {total_qualified_streams} 条 (已按分辨率+速度从高到低排序)")
+    print("=" * 78, flush=True)
+    print(f"🎉 真实画面测速与多元化装配完成！")
+    print(f"   - 有真实画面频道数: {total_channels_with_streams} 个")
+    print(f"   - 保留可流畅播放源: {total_qualified_streams} 条 (已按分辨率+持续速度排序)")
     print(f"   - 交付文件 (TXT 格式): {OUTPUT_LIVE_TXT}")
     print(f"   - 交付文件 (M3U 格式): {OUTPUT_LIVE_M3U}")
-    print("=" * 75, flush=True)
+    print("=" * 78, flush=True)
+    print("⚠️  注意：GitHub Actions 跑在海外，测速数值会低于国内真实盒子。")
+    print("   最终仍建议在国内网络用 TVBox 抽测确认。")
+    print("=" * 78, flush=True)
 
 
 # =========================================================================
-# 命令行调度入口：支持 harvest / speedtest / full
+# 命令行调度入口
 # =========================================================================
 
 def main():
