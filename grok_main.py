@@ -24,7 +24,7 @@ from typing import Dict, List, Set, Tuple, Optional
 
 import requests
 
-from config import (
+from grok_config import (
     DEFAULT_CCTV_CHANNELS,
     DEFAULT_SATELLITE_CHANNELS,
     ALL_DEFAULT_TARGETS,
