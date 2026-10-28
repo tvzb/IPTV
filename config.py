@@ -1,9 +1,14 @@
 # -*- coding: utf-8 -*-
 """
 IPTV 配置模块：
-- 支持双模自动识别 (网页端 JSON / 手动点击 Run workflow 读取 config.py)
-- 核心清洗与黑名单规则：彻底拦截两 IP 相连的 /rtp/ 与 /udp/ 组播假流、Flash、纯音频广播
-- 频道限额与测速参数调优
+- 支持双模自动识别：
+  1. 网页点击运行：优先读取环境变量 CUSTOM_CHANNELS_JSON 或 channels.json；
+  2. GitHub 页面手动点击 "Run workflow" 或定时任务：统一采用本模块内置的官方频道名称与顺序定义：
+     - CCTV 1~17 综合/专业频道 (严格排除 CCTV-5+)
+     - 30 个省级卫视频道 (7个置顶优先卫视 + 23个按首字拼音升序排列卫视；已剔除康巴卫视与兵团卫视，福建卫视统一命名为东南卫视)
+- 核心提速与清洗规则：
+  - 彻底拦截两 IP 中间以 /rtp/ 或 /udp/ 连接的组播无图像假流、Flash、纯音频广播；
+  - 单频道候选上限 30 条、同 IP 最多 3 条，彻底避免超时取消。
 """
 import json
 import os
@@ -37,6 +42,7 @@ MIN_SPEED_KBS = 200.0  # 默认最低有效速度阈值 (KB/s)
 MAX_CANDIDATES_PER_CHANNEL = 30  # 每个频道最多候选测速源数（防止测速总量失控）
 MAX_SAME_IP_PER_CHANNEL = 3
 
+# 官方默认央视频道（CCTV 1~17，严格排除 CCTV-5+）
 DEFAULT_CCTV_CHANNELS = [
     "CCTV-1 综合", "CCTV-2 财经", "CCTV-3 综艺", "CCTV-4 中文国际",
     "CCTV-5 体育", "CCTV-6 电影", "CCTV-7 国防军事", "CCTV-8 电视剧",
@@ -45,18 +51,41 @@ DEFAULT_CCTV_CHANNELS = [
     "CCTV-17 农业农村",
 ]
 
+# 官方默认省级卫视频道（7个指定置顶优先卫视 + 23个按首字拼音升序排列省级卫视；已剔除康巴/兵团，福建统一为东南卫视）
 DEFAULT_SATELLITE_CHANNELS = [
     # 7个置顶优先卫视
     "江西卫视", "东方卫视", "北京卫视", "江苏卫视", "浙江卫视", "湖南卫视", "辽宁卫视",
-    # 其余25个省级卫视
-    "安徽卫视", "重庆卫视", "东南卫视", "甘肃卫视", "广东卫视", "广西卫视",
-    "贵州卫视", "海南卫视", "河北卫视", "河南卫视", "黑龙江卫视", "湖北卫视", "吉林卫视",
-    "内蒙古卫视", "宁夏卫视", "青海卫视", "山东卫视", "山西卫视", "陕西卫视",
-    "深圳卫视", "四川卫视", "天津卫视", "西藏卫视", "新疆卫视", "云南卫视",
+    # 其余23个省级卫视（严格按首字汉语拼音字母升序排列）
+    "安徽卫视",   # Anhui
+    "重庆卫视",   # Chongqing
+    "东南卫视",   # Dongnan (福建卫视统一为东南卫视)
+    "甘肃卫视",   # Gansu
+    "广东卫视",   # Guangdong
+    "广西卫视",   # Guangxi
+    "贵州卫视",   # Guizhou
+    "海南卫视",   # Hainan
+    "河北卫视",   # Hebei
+    "河南卫视",   # Henan
+    "黑龙江卫视", # Heilongjiang
+    "湖北卫视",   # Hubei
+    "吉林卫视",   # Jilin
+    "内蒙古卫视", # Neimenggu
+    "宁夏卫视",   # Ningxia
+    "青海卫视",   # Qinghai
+    "山东卫视",   # Shandong
+    "山西卫视",   # Shanxi
+    "陕西卫视",   # Shaanxi
+    "深圳卫视",   # Shenzhen
+    "四川卫视",   # Sichuan
+    "天津卫视",   # Tianjin
+    "西藏卫视",   # Xizang
+    "新疆卫视",   # Xinjiang
+    "云南卫视",   # Yunnan
 ]
 
 ALL_DEFAULT_TARGETS = DEFAULT_CCTV_CHANNELS + DEFAULT_SATELLITE_CHANNELS
 
+# 频道英文/拼音标识对照字典（用于 URL 字母规律裂变）
 CHANNEL_SLUGS: Dict[str, List[str]] = {
     "CCTV-1 综合": ["cctv1", "cctv-1"],
     "CCTV-2 财经": ["cctv2", "cctv-2"],
@@ -84,7 +113,7 @@ CHANNEL_SLUGS: Dict[str, List[str]] = {
     "辽宁卫视": ["liaoning", "lnws"],
     "安徽卫视": ["anhui", "ahws"],
     "重庆卫视": ["chongqing", "cqws"],
-    "东南卫视": ["dongnan", "fujian", "dnws"],
+    "东南卫视": ["dongnan", "fujian", "dnws", "fjws"],
     "甘肃卫视": ["gansu", "gsws"],
     "广东卫视": ["guangdong", "gdws"],
     "广西卫视": ["guangxi", "gxws"],
@@ -93,7 +122,7 @@ CHANNEL_SLUGS: Dict[str, List[str]] = {
     "河北卫视": ["hebei", "hbws", "hews"],
     "河南卫视": ["henan", "hnaws"],
     "黑龙江卫视": ["heilongjiang", "hljws", "hljs"],
-    "湖北卫视": ["hubei"],
+    "湖北卫视": ["hubei", "hbws"],
     "吉林卫视": ["jilin", "jlws"],
     "内蒙古卫视": ["neimenggu", "nmgws", "nmws"],
     "宁夏卫视": ["ningxia", "nxws"],
@@ -109,6 +138,7 @@ CHANNEL_SLUGS: Dict[str, List[str]] = {
     "云南卫视": ["yunnan", "ynws"],
 }
 
+# 黑名单正则规则：拦截两IP相连的 /rtp/ 与 /udp/ 组播假流、Flash、纯音频、一次性Token等
 BLACKLIST_URL_PATTERNS = re.compile(
     r'('
     r'/(rtp|udp)/|'                     # 拦截两IP中间以/rtp/或/udp/相连的组播假源 (加载有数据但无图像/几秒跳转)
@@ -143,7 +173,12 @@ def get_domestic_headers(extra_headers: Dict[str, str] = None) -> Dict[str, str]
 
 
 def load_user_channel_structure() -> Dict[str, List[str]]:
-    """双模智能载入频道配置"""
+    """
+    智能载入频道配置：
+    - 若网页端传入环境变量 CUSTOM_CHANNELS_JSON，则优先载入网页端自定义的频道顺序；
+    - 若存在 channels.json，则读取 channels.json；
+    - 否则自动采用 config.py 内置官方标准定义 (CCTV 1~17 排除 5+，7优先+23拼音省级卫视)。
+    """
     env_json = os.environ.get("CUSTOM_CHANNELS_JSON", "").strip()
     if env_json:
         try:
@@ -162,22 +197,6 @@ def load_user_channel_structure() -> Dict[str, List[str]]:
         except Exception as e:
             print(f"[!] 解析网页端 CUSTOM_CHANNELS_JSON 异常: {e}", flush=True)
 
-    try:
-        import config
-        if hasattr(config, "load_user_channel_structure"):
-            cfg1_struct = config.load_user_channel_structure()
-            if isinstance(cfg1_struct, dict) and len(cfg1_struct) > 0:
-                print(f"[*] 【运行模式】手动点击 Run workflow：成功载入 config.py 官方定义", flush=True)
-                return cfg1_struct
-        elif hasattr(config, "DEFAULT_CCTV_CHANNELS") and hasattr(config, "DEFAULT_SATELLITE_CHANNELS"):
-            print(f"[*] 【运行模式】手动点击 Run workflow：采用 config.py 央视与卫视定义", flush=True)
-            return {
-                "央视频道": list(config.DEFAULT_CCTV_CHANNELS),
-                "卫视频道": list(config.DEFAULT_SATELLITE_CHANNELS),
-            }
-    except ImportError:
-        pass
-
     if os.path.exists(CHANNELS_JSON_FILE):
         try:
             with open(CHANNELS_JSON_FILE, "r", encoding="utf-8") as f:
@@ -188,7 +207,7 @@ def load_user_channel_structure() -> Dict[str, List[str]]:
         except Exception:
             pass
 
-    print("[*] 采用内置默认官方频道列表 (CCTV 1~17 排除 5+，7优先+25拼音卫视)", flush=True)
+    print("[*] 【运行模式】采用 config.py 官方定义 (CCTV 1~17 排除 5+，7优先+23拼音省级卫视，已剔除康巴/兵团，福建统一为东南卫视)", flush=True)
     return {
         "央视频道": list(DEFAULT_CCTV_CHANNELS),
         "卫视频道": list(DEFAULT_SATELLITE_CHANNELS),
@@ -225,8 +244,18 @@ def normalize_channel_name(raw_name: str, custom_targets: Set[str] = None) -> st
         return ""
 
     clean_name = raw_name.strip()
+
+    # 排除非省级卫视 (康巴卫视、兵团卫视)
+    if any(bad in clean_name for bad in ("康巴", "兵团")):
+        return ""
+
+    # 严格排除 CCTV-5+
     if re.search(r'(?i)cctv[-_ ]?5\+', clean_name):
         return ""
+
+    # 福建卫视/福建电视台 统一命名为 东南卫视
+    if any(k in clean_name for k in ("福建卫视", "福建台", "福建省台", "海峡卫视")):
+        return "东南卫视"
 
     if custom_targets and clean_name in custom_targets:
         return clean_name
