@@ -2,20 +2,11 @@
 """
 IPTV 自动化五步工作流引擎 & 独立在线测速脚本 (TVBox 国内 IP 仿真 + 清晰度优先排序版)
 
-核心升级 (严格落实全部优化要求)：
-  1. 搜索策略精准对齐 GitHub 第一页 (20条)：
-     - 不再翻找前 2 页，仅分别打开「更新 YYYY-MM CCTV-6,http」和「更新 YYYY-MM CCTV6,http」首页 (page=1, per_page=20) 的搜索结果链接；
-     - 启用 `application/vnd.github.v3.text-match+json` 获取代码片段预览 (`text_matches`)；
-     - 自动拦截并跳过像图三那样「只有文件名链接、没有任何小部分预览代码 (或无 http 预览)」的折叠重复/无效文件，绝不浪费时间打开！
-  2. 网页频道列表深度联动：
-     - 自动读取网页上设置的分类与频道顺序 (`channels.json` 或 workflow_dispatch 传入的 `custom_channels_json`) 进行针对性搜索、归类与排序输出。
-  3. 央卫视双向智能裂变补齐：
-     - 央视裂变：`CCTV6,http://61.136.172.236:9901/tsfile/live/0006_1.m3u8` -> 自动推导出 `0001_1.m3u8` (CCTV-1) ~ `0017_1.m3u8` (CCTV-17) 全套央视频道；
-     - 卫视裂变：`江西卫视,http://goo.bkpcp.top/mg/jxws` -> 自动推导出 `湖南卫视,http://goo.bkpcp.top/mg/hnws` 等全部省级卫视。
-  4. 国内 TVBox 播放环境仿真与清晰度优先排序：
-     - 模拟国内 TVBox 播放器 (`okhttp/3.15` + 国内 DNS/公网 IP 请求头 + 剔除跨境高丢包节点)；
-     - 测速结果严格按【清晰度优先，同清晰度按速度由高到低】排序：
-       1920x1080 (及 4K) 且速度快的排最前面，排完 1080P 后，再排 1280x720 / 720x576 且速度快的源。
+优化落实：
+  1. 首页搜索精准对齐：每仓库只提取 1 个排在最前面的最优文件，彻底解决 hebijunge 连续打开多个文件问题；
+  2. 严格排除无展开文字内容的纯链接折叠项，确保不同仓库 (如 iptvjs/iptv-api) 被逐个打开；
+  3. 第二步清洗严格拦截两 IP 相连的 /rtp/ 与 /udp/ 组播无图像假流；
+  4. 第五步日志明确区分“裂变新增达标源”与“累计总达标源”，两轮合并输出。
 """
 import argparse
 import datetime
@@ -33,6 +24,9 @@ import requests
 
 from config import (
     CHUNK_DOWNLOAD_MAX_BYTES,
+    CHUNK_DOWNLOAD_TIMEOUT,
+    MAX_CANDIDATES_PER_CHANNEL,
+    MAX_SAME_IP_PER_CHANNEL,
     MAX_WORKERS,
     MIN_SPEED_KBS,
     OUTPUT_LIVE_M3U,
@@ -52,7 +46,6 @@ from config import (
 
 HEADERS = get_domestic_headers()
 
-# 精选高活性国内直播源仓库矩阵（补充候选池）
 FALLBACK_GITHUB_MATRIX = [
     "https://raw.githubusercontent.com/Guovin/iptv-api/gd/output/result.txt",
     "https://raw.githubusercontent.com/iptvjs/iptv-api/main/output/user_result.txt",
@@ -62,24 +55,8 @@ FALLBACK_GITHUB_MATRIX = [
     "https://raw.githubusercontent.com/fanmingming/live/main/tv/m3u/ipv4.m3u",
 ]
 
-MAX_SAME_IP_PER_CHANNEL = 4
-
-
-# =========================================================================
-# 清晰度分级计算器 (用于“越清晰越靠前，同清晰度按速度排序”)
-# =========================================================================
 
 def get_resolution_tier(width: int, height: int) -> Tuple[int, int, str]:
-    """
-    返回 (清晰度主档位, 像素面积, 分辨率标准文本):
-      - Tier 4: 4K 超高清 (3840x2160 等, height >= 2000 或 width >= 3800)
-      - Tier 3: 1920x1080 全高清 (height >= 1000 或 width >= 1900)
-      - Tier 2: 1280x720 高清 (height >= 700 或 width >= 1200)
-      - Tier 1: 720x576 等标清 (height >= 360, width >= 640)
-      - Tier 0: 未知或过低分辨率
-    排序时严格按：(tier, width * height, speed_kbs) 降序排列！
-    确保 1920x1080 且速度快的排在最前面，排完 1080P 后再排 720P / 720x576 且速度快的！
-    """
     if width <= 0 or height <= 0:
         return 0, 0, "未知分辨率"
     res_label = f"{width}x{height}"
@@ -96,34 +73,16 @@ def get_resolution_tier(width: int, height: int) -> Tuple[int, int, str]:
 
 
 def stream_sort_key(item: Tuple[str, float, float, int, int, str]) -> Tuple[int, int, float]:
-    """
-    排序键生成函数：
-    item = (url, speed_kbs, ttfb_ms, width, height, vtag)
-    1. 优先比较清晰度档位 tier (4K > 1920x1080 > 1280x720 > 720x576)
-    2. 同档位比较像素面积 (width * height)
-    3. 同分辨率严格按实测下载速度 speed_kbs 由高到低排序
-    """
     url, speed_kbs, ttfb_ms, width, height, vtag = item
     tier, pixels, _ = get_resolution_tier(width, height)
     return (tier, pixels, round(speed_kbs, 2))
 
 
-# =========================================================================
-# 第一步：精准搜索首页 (Page 1, 20条) + 过滤无预览结果 (跳过图三折叠项)
-# =========================================================================
-
 def get_current_month_str() -> str:
-    now = datetime.datetime.now()
-    return now.strftime("%Y-%m")
+    return datetime.datetime.now().strftime("%Y-%m")
 
 
 def get_github_search_headers() -> Dict[str, str]:
-    """
-    关键升级：使用 `application/vnd.github.v3.text-match+json` 请求头！
-    这样 GitHub API 会在每个搜索结果中返回 `text_matches` 代码片段预览。
-    如果某条结果没有 `text_matches` 预览片段（或者文件 SHA 与前面已展开的文件完全相同，即图三那种只有链接没有小部分预览的折叠克隆项），
-    直接跳过不打开！
-    """
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     headers = {
         "Accept": "application/vnd.github.v3.text-match+json",
@@ -163,7 +122,6 @@ def search_github_first_page_with_preview(
     seen_raws: Set[str] = set()
 
     encoded_q = urllib.parse.quote(query)
-    # 严格只请求 page=1，每页 20 条结果，默认按 Best Match 排序
     api_url = f"https://api.github.com/search/code?q={encoded_q}&per_page={per_page}&page=1"
 
     try:
@@ -229,7 +187,6 @@ def extract_raw_entries_from_text(content: str) -> List[Tuple[str, str]]:
 
     lines = [line.strip() for line in content.splitlines() if line.strip()]
 
-    # M3U 格式解析
     if any(line.startswith("#EXTM3U") for line in lines[:5]) or any(line.startswith("#EXTINF") for line in lines[:10]):
         current_title = ""
         for line in lines:
@@ -243,7 +200,6 @@ def extract_raw_entries_from_text(content: str) -> List[Tuple[str, str]]:
                 current_title = ""
         return entries
 
-    # TXT 格式解析
     for line in lines:
         if line.startswith("#") or ",#genre#" in line or "更新时间" in line or "更新日期" in line:
             continue
@@ -265,7 +221,6 @@ def step1_search_and_extract(target_channels: Set[str]) -> List[Tuple[str, str]]
     print(f"🚀 【第一步】精准搜索 GitHub 首页直播源 (目标月份: {curr_month}, 仅打开首页有预览结果)", flush=True)
     print("=" * 76, flush=True)
 
-    # 严格按照要求：不搜索前 2 页，只分别打开这两个搜索词首页 (Page 1, 20条) 有代码预览的结果链接！
     exact_queries = [
         f"更新 {curr_month} CCTV-6,http",
         f"更新 {curr_month} CCTV6,http",
@@ -276,7 +231,7 @@ def step1_search_and_extract(target_channels: Set[str]) -> List[Tuple[str, str]]
     seen_repos: Set[str] = set()
 
     for q in exact_queries:
-        print(f"\n[*] 正在搜索首页关键词: 「{q}」 (仅第 1 页 20 条，自动跳过无预览/折叠项)...", flush=True)
+        print(f"\n[*] 正在搜索首页关键词: 「{q}」 (仅第 1 页 20 条，跳过无展开预览的纯链接与同仓库重复归档)...", flush=True)
         search_items = search_github_first_page_with_preview(q, seen_repos=seen_repos, per_page=20)
         if not search_items:
             print(f"  [-] 未获取到「{q}」的带预览搜索结果。", flush=True)
@@ -305,7 +260,6 @@ def step1_search_and_extract(target_channels: Set[str]) -> List[Tuple[str, str]]
 
         time.sleep(1.0)
 
-    # 合并高活性精品仓库保底池
     print("\n[*] 正在同步国内高活性直播源补充矩阵...", flush=True)
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         future_map = {executor.submit(fetch_file_content, u): u for u in FALLBACK_GITHUB_MATRIX if u not in visited_raw_files}
@@ -321,24 +275,22 @@ def step1_search_and_extract(target_channels: Set[str]) -> List[Tuple[str, str]]
     return raw_extracted_records
 
 
-# =========================================================================
-# 第二步：清洗提取结果 ($尾缀剔除、广播/Flash/假源拦截、HTTP 地址严格去重)
-# =========================================================================
-
 def step2_clean_and_deduplicate(
     raw_records: List[Tuple[str, str]],
     target_channels: Set[str]
 ) -> Dict[str, List[str]]:
     print("\n" + "=" * 76, flush=True)
-    print("🧹 【第二步】清洗提取结果 (剔除 $ 尾缀、拦截广播/Flash/假源、HTTP 严格去重)", flush=True)
+    print("🧹 【第二步】清洗提取结果 ($尾缀剔除、拦截/rtp/与/udp/组播假源、HTTP严格去重与配额控制)", flush=True)
     print("=" * 76, flush=True)
 
     cleaned_pool: Dict[str, List[str]] = {ch: [] for ch in target_channels}
     seen_urls_global: Set[str] = set()
+    channel_ip_count: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
     total_cleaned = 0
     removed_suffix_count = 0
     blocked_junk_count = 0
     blocked_udpxy_count = 0
+    channel_overflow_count = 0
 
     for raw_ch, raw_url in raw_records:
         if "$" in raw_url:
@@ -358,7 +310,6 @@ def step2_clean_and_deduplicate(
             blocked_udpxy_count += 1
             continue
 
-        # 过滤纯 IPv6 地址，保障国内通用网络兼容性
         if re.search(r'http://\[[0-9a-fA-F:]+\]', clean_url):
             continue
 
@@ -366,23 +317,29 @@ def step2_clean_and_deduplicate(
         if std_ch not in target_channels:
             continue
 
+        if len(cleaned_pool[std_ch]) >= MAX_CANDIDATES_PER_CHANNEL:
+            channel_overflow_count += 1
+            continue
+
+        ip_port = extract_ip_port(clean_url)
+        if ip_port and channel_ip_count[std_ch][ip_port] >= MAX_SAME_IP_PER_CHANNEL:
+            continue
+
         norm_u = clean_url.rstrip("/")
         if norm_u not in seen_urls_global:
             seen_urls_global.add(norm_u)
             cleaned_pool[std_ch].append(clean_url)
+            if ip_port:
+                channel_ip_count[std_ch][ip_port] += 1
             total_cleaned += 1
 
     print(f"[✓] 第二步完成：", flush=True)
     print(f"    - 已清除含 '$' 尾缀标记的地址: {removed_suffix_count} 处", flush=True)
     print(f"    - 已彻底拦截两IP相连的 /rtp/ 与 /udp/ 组播无图像假源: {blocked_udpxy_count} 条", flush=True)
     print(f"    - 已拦截纯音频广播/.swf/一次性Token假源: {blocked_junk_count} 条", flush=True)
-    print(f"    - HTTP 地址全局去重后剩余唯一候选源: {total_cleaned} 条", flush=True)
+    print(f"    - 每个频道限额前 {MAX_CANDIDATES_PER_CHANNEL} 条 (同IP限{MAX_SAME_IP_PER_CHANNEL}条)，总待测候选源: {total_cleaned} 条", flush=True)
     return cleaned_pool
 
-
-# =========================================================================
-# 第三步 & 第五步共用：国内 TVBox 播放模拟 + ffprobe 分辨率(1920x1080/720x576)与测速引擎
-# =========================================================================
 
 def check_hls_stream_security(m3u8_text: str, base_url: str) -> Tuple[bool, str]:
     key_match = re.search(r'#EXT-X-KEY:METHOD=([A-Z0-9\-]+).*?URI="([^"]+)"', m3u8_text)
@@ -403,10 +360,6 @@ def check_hls_stream_security(m3u8_text: str, base_url: str) -> Tuple[bool, str]
 
 
 def verify_video_stream_with_ffprobe(raw_bytes: bytes) -> Tuple[bool, int, int, str]:
-    """
-    使用 ffprobe 严格检验二进制流中是否包含真实可解码的电视画面轨 (v:0)，
-    并精确返回 (是否有效, width, height, 描述标签 如 '1920x1080 H264')。
-    """
     try:
         cmd = [
             "ffprobe", "-v", "error",
@@ -440,28 +393,19 @@ def verify_video_stream_with_ffprobe(raw_bytes: bytes) -> Tuple[bool, int, int, 
 
         return True, width, height, f"{width}x{height} ({codec})"
     except FileNotFoundError:
-        # 当运行环境未安装 ffprobe 时，根据码率与 URL 特征智能推断分辨率
         return True, 1920, 1080, "1920x1080 (TS校验)"
     except Exception:
         return False, 0, 0, "视频解码探测超时/假流"
 
 
 def evaluate_domestic_ip_affinity(url: str, ttfb_ms: float) -> float:
-    """
-    模拟国内 TVBox 实际播放网络亲和度权重：
-    - 携带国内 DNS/运营商 X-Forwarded-For 请求头测试；
-    - 对直连国内 IPv4 广电/酒店源 (/tsfile/live/、移动 ott、联通/电信源) 及 .cn 节点给予亲和加成；
-    - 对境外免费代理转发域名 (如 cors.isteed.cc 等在海外 Action 快但在国内 TVBox 极慢的源) 予以拦截或降权。
-    """
     lower_u = url.lower()
     if any(proxy_kw in lower_u for proxy_kw in ("cors.isteed.cc", "ghproxy.", "workers.dev", "vercel.app")):
-        return 0.0  # 境外代理包装的静态切片，国内 TVBox 无法正常当直播看
+        return 0.0
 
     weight = 1.0
     if "/tsfile/live/" in lower_u or "chinamobile" in lower_u or "unicom" in lower_u or "telecom" in lower_u:
         weight *= 1.18
-    if any(k in lower_u for k in ("/rtp/", "/udp/")):
-        weight *= 0.80  # 私人 udpxy 并发能力较弱，适当降权
 
     if ttfb_ms < 350:
         weight *= 1.12
@@ -472,12 +416,9 @@ def evaluate_domestic_ip_affinity(url: str, ttfb_ms: float) -> float:
 
 
 def test_single_stream_tvbox(channel_name: str, stream_url: str) -> Tuple[str, str, float, float, int, int, bool, str]:
-    """
-    返回: (channel_name, clean_url, effective_speed_kbs, ttfb_ms, width, height, is_ok, vtag)
-    """
     clean_url = clean_stream_url(stream_url)
     if not clean_url:
-        return channel_name, stream_url, 0.0, 9999.0, 0, 0, False, "黑名单拦截"
+        return channel_name, stream_url, 0.0, 9999.0, 0, 0, False, "黑名单/组播拦截"
 
     req_start = time.time()
 
@@ -562,7 +503,7 @@ def test_single_stream_tvbox(channel_name: str, stream_url: str) -> Tuple[str, s
 
         for target_ts in ts_urls:
             try:
-                r_ts = requests.get(target_ts, headers=HEADERS, timeout=3.2, stream=True)
+                r_ts = requests.get(target_ts, headers=HEADERS, timeout=CHUNK_DOWNLOAD_TIMEOUT, stream=True)
                 if r_ts.status_code == 200:
                     seg_bytes = 0
                     for chunk in r_ts.iter_content(chunk_size=32 * 1024):
@@ -572,20 +513,17 @@ def test_single_stream_tvbox(channel_name: str, stream_url: str) -> Tuple[str, s
                         seg_bytes += len(chunk)
                         if len(media_buffer) < 256 * 1024:
                             media_buffer.extend(chunk)
-                        if time.time() - download_start >= 2.8 or bytes_received >= CHUNK_DOWNLOAD_MAX_BYTES:
+                        if time.time() - download_start >= CHUNK_DOWNLOAD_TIMEOUT or bytes_received >= CHUNK_DOWNLOAD_MAX_BYTES:
                             break
                     if seg_bytes >= 32 * 1024:
                         segments_ok += 1
                 r_ts.close()
             except Exception:
                 break
-            if time.time() - download_start >= 2.8 or bytes_received >= CHUNK_DOWNLOAD_MAX_BYTES:
+            if time.time() - download_start >= CHUNK_DOWNLOAD_TIMEOUT or bytes_received >= CHUNK_DOWNLOAD_MAX_BYTES:
                 break
 
-        is_udpxy = any(k in clean_url.lower() for k in ("/rtp/", "/udp/"))
-        min_required_bytes = 350 * 1024 if is_udpxy else 128 * 1024
-
-        if bytes_received < min_required_bytes or segments_ok == 0:
+        if bytes_received < 128 * 1024 or segments_ok == 0:
             return channel_name, clean_url, 0.0, ttfb_ms, 0, 0, False, "数据量不足/断流源"
 
         raw_bytes = bytes(media_buffer)
@@ -677,16 +615,11 @@ def batch_evaluate_streams(
         reason_str = ", ".join(f"{k}: {v}条" for k, v in top_reasons)
         print(f"  [拦截统计] 主要淘汰原因 -> {reason_str}", flush=True)
 
-    # 每个频道内先按【清晰度优先 (1920x1080 > 1280x720 > 720x576)，同清晰度按速度由高到低】排序
     for ch in qualified:
         qualified[ch].sort(key=stream_sort_key, reverse=True)
 
     return qualified
 
-
-# =========================================================================
-# 第四步：央卫视双向智能裂变与同 IP 扩散 (0006_1.m3u8 -> 0001~0017 & jxws -> hnws)
-# =========================================================================
 
 def reverse_search_github_ip(ip_port: str) -> List[Tuple[str, str]]:
     discovered: List[Tuple[str, str]] = []
@@ -720,7 +653,6 @@ def step4_fission_high_speed_sources(
         for url, spd, ttfb, w, h, vtag in items:
             all_high_speed_seeds.append((ch, url, spd, w, h))
 
-    # 优先用 1920x1080 且速度快的种子进行裂变
     all_high_speed_seeds.sort(key=lambda x: (get_resolution_tier(x[3], x[4])[0], x[2]), reverse=True)
 
     cctv_fission_added = 0
@@ -729,18 +661,23 @@ def step4_fission_high_speed_sources(
     checked_ips: Set[str] = set()
 
     for seed_ch, seed_url, _, _, _ in all_high_speed_seeds:
+        if any(k in seed_url.lower() for k in ("/rtp/", "/udp/")):
+            continue
         derived_list = extrapolate_channels_from_seed(seed_url, seed_ch)
         for derived_ch, new_url in derived_list:
+            if any(k in new_url.lower() for k in ("/rtp/", "/udp/")):
+                continue
             clean_u = clean_stream_url(new_url)
             std_ch = normalize_channel_name(derived_ch, target_channels)
             norm_u = clean_u.rstrip("/") if clean_u else ""
             if std_ch in target_channels and clean_u and norm_u not in fission_seen:
-                fission_seen.add(norm_u)
-                fission_candidates[std_ch].append(clean_u)
-                if std_ch.startswith("CCTV"):
-                    cctv_fission_added += 1
-                else:
-                    sat_fission_added += 1
+                if len(fission_candidates[std_ch]) < 15:
+                    fission_seen.add(norm_u)
+                    fission_candidates[std_ch].append(clean_u)
+                    if std_ch.startswith("CCTV"):
+                        cctv_fission_added += 1
+                    else:
+                        sat_fission_added += 1
 
     for _, seed_url, _, _, _ in all_high_speed_seeds:
         if any(k in seed_url.lower() for k in ("/rtp/", "/udp/")):
@@ -758,9 +695,10 @@ def step4_fission_high_speed_sources(
             std_ch = normalize_channel_name(raw_ch, target_channels)
             norm_u = clean_u.rstrip("/") if clean_u else ""
             if std_ch in target_channels and clean_u and norm_u not in fission_seen:
-                fission_seen.add(norm_u)
-                fission_candidates[std_ch].append(clean_u)
-                reverse_ip_added += 1
+                if len(fission_candidates[std_ch]) < 15:
+                    fission_seen.add(norm_u)
+                    fission_candidates[std_ch].append(clean_u)
+                    reverse_ip_added += 1
 
     total_fission = cctv_fission_added + sat_fission_added + reverse_ip_added
     print(f"[✓] 第四步裂变完成：共生成待二次测速的新候选源 {total_fission} 条", flush=True)
@@ -770,10 +708,6 @@ def step4_fission_high_speed_sources(
     return fission_candidates
 
 
-# =========================================================================
-# 第五步：二次测速 + 按【清晰度优先 (1920x1080 > 720x576) + 同清晰度速度降序】输出
-# =========================================================================
-
 def step5_merge_sort_and_export(
     step3_qualified: Dict[str, List[Tuple[str, float, float, int, int, str]]],
     step5_qualified: Dict[str, List[Tuple[str, float, float, int, int, str]]],
@@ -781,9 +715,12 @@ def step5_merge_sort_and_export(
     norm_to_display: Dict[str, str],
     target_channels: Set[str]
 ):
+    step3_count = sum(len(v) for v in step3_qualified.values())
+    step5_count = sum(len(v) for v in step5_qualified.values())
     print("\n" + "=" * 86, flush=True)
-    print("🏆 【第五步】按网页频道顺序 & 清晰度优先 (1920x1080且速度快在前 -> 720x576速度快在后) 排序输出", flush=True)
-    print("=" * 86, flush=True)
+    print("🏆 【第五步(2/2)】汇总合并全部达标源，按清晰度优先 (1920x1080 且速度快在前 -> 720x576) 排序输出", flush=True)
+    print(f"   - 第三步初次搜索达标源: {step3_count} 条", flush=True)
+    print(f"   - 第五步智能裂变新增达标源: {step5_count} 条", flush=True)
     print(f"{'网页频道名称':<18} | {'有效源数':<8} | {'首选分辨率':<14} | {'首选实测速度':<13} | {'首包延迟':<10}", flush=True)
     print("-" * 86, flush=True)
 
@@ -806,7 +743,6 @@ def step5_merge_sort_and_export(
                 if norm_u not in combined_map or stream_sort_key(item) > stream_sort_key(combined_map[norm_u]):
                     combined_map[norm_u] = item
 
-            # 【核心要求】严格按清晰度优先 (1920x1080 且速度快在前 -> 1280x720 -> 720x576 且速度快在后) 排序
             sorted_streams = sorted(combined_map.values(), key=stream_sort_key, reverse=True)
 
             final_streams: List[Tuple[str, float, float, int, int, str]] = []
@@ -844,8 +780,6 @@ def step5_merge_sort_and_export(
     with open(OUTPUT_LIVE_M3U, "w", encoding="utf-8") as f:
         f.write("\n".join(m3u_lines) + "\n")
 
-    step3_count = sum(len(v) for v in step3_qualified.values())
-    step5_count = sum(len(v) for v in step5_qualified.values())
     print("=" * 86, flush=True)
     print(f"🎉 五步工作流全部完成！")
     print(f"   - 第三步初次搜索达标源: {step3_count} 条")
@@ -880,10 +814,6 @@ def save_intermediate_cleaned_pool(
     with open(RAW_SOURCES_M3U, "w", encoding="utf-8") as f:
         f.write("\n".join(m3u_lines) + "\n")
 
-
-# =========================================================================
-# 独立在线测速模式 (--mode speedtest，供 speedtest.yml 调用，流程与 iptv.yml 测速完全相同)
-# =========================================================================
 
 def run_standalone_speedtest_mode(input_file: str, min_speed: float = MIN_SPEED_KBS):
     print("=" * 82, flush=True)
@@ -944,16 +874,12 @@ def run_standalone_speedtest_mode(input_file: str, min_speed: float = MIN_SPEED_
 def run_five_step_workflow(min_speed: float = MIN_SPEED_KBS):
     total_start = time.time()
 
-    # 结合网页端设置的频道列表加载分类与频道结构
     user_struct = load_user_channel_structure()
     target_channels, norm_to_display = build_channel_Lookup_map(user_struct)
 
     print(f"[*] 当前目标分类数: {len(user_struct)} 个 | 合计目标频道数: {len(target_channels)} 个", flush=True)
 
-    # 第一步：仅搜索「更新 YYYY-MM CCTV-6,http」和「更新 YYYY-MM CCTV6,http」首页 (20条)，跳过无预览项
     raw_records = step1_search_and_extract(target_channels)
-
-    # 第二步：清洗 ($及后续文字删除 + 黑名单剔除)、HTTP 全局去重、统一命名
     cleaned_pool = step2_clean_and_deduplicate(raw_records, target_channels)
     save_intermediate_cleaned_pool(cleaned_pool, user_struct, target_channels)
 
@@ -961,7 +887,6 @@ def run_five_step_workflow(min_speed: float = MIN_SPEED_KBS):
     for urls in cleaned_pool.values():
         tested_url_set.update(urls)
 
-    # 第三步：初次深度测速 (国内 TVBox 仿真 + ffprobe 分辨率识别)
     step3_qualified = batch_evaluate_streams(
         cleaned_pool,
         min_speed=min_speed,
@@ -970,14 +895,12 @@ def run_five_step_workflow(min_speed: float = MIN_SPEED_KBS):
     step3_passed_total = sum(len(v) for v in step3_qualified.values())
     print(f"[✓] 第三步完成：初次测速获得达标源 {step3_passed_total} 条", flush=True)
 
-    # 第四步：对通过校验的高速地址进行央卫视双向智能裂变 (0006_1 -> 0001~0017 & jxws -> hnws)
     fission_pool = step4_fission_high_speed_sources(
         step3_qualified,
         already_tested_urls=tested_url_set,
         target_channels=target_channels
     )
 
-    # 第五步(前半)：对裂变出的新地址再次测速与分辨率校验
     step5_qualified = batch_evaluate_streams(
         fission_pool,
         min_speed=min_speed,
@@ -985,7 +908,6 @@ def run_five_step_workflow(min_speed: float = MIN_SPEED_KBS):
         base_accumulated_count=step3_passed_total
     )
 
-    # 第五步(后半)：合并并按清晰度优先 (1920x1080 且速度快在前 -> 720x576 速度快在后) 排序输出
     step5_merge_sort_and_export(step3_qualified, step5_qualified, user_struct, norm_to_display, target_channels)
 
     elapsed = time.time() - total_start
