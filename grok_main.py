@@ -40,8 +40,8 @@ from grok_config import (
     is_radio_source,
     RAW_SOURCES_TXT,
     RAW_SOURCES_M3U,
-    OUTPUT_LIVE_TXT,
-    OUTPUT_LIVE_M3U,
+    OUTPUT_grok_LIVE_TXT,
+    OUTPUT_grok_LIVE_M3U,
     TVBOX_USER_AGENT,
     REQUEST_TIMEOUT,
     CHUNK_DOWNLOAD_TIMEOUT,
@@ -370,28 +370,18 @@ def harvest_all_sources() -> Dict[str, List[str]]:
 
     # 扩大搜索查询矩阵（覆盖更多月份、更多关键词、更多格式）
     search_queries = [
-        f"更新 {curr_month} CCTV-2,http",
-        f"更新 {prev_month} CCTV-2,http",
-        f"更新 {prev2_month} CCTV-2,http",
         f"更新 {curr_month} CCTV-6,http",
-        f"更新 {curr_month} 卫视频道,http",
-        f"更新 {prev_month} 卫视频道,http",
-        f"CCTV-1 {curr_month} m3u8",
-        f"CCTV-6 {curr_month} m3u8",
-        f"CCTV-1 {prev_month} m3u8",
-        f"topic:iptv {curr_month}",
-        f"topic:iptv {prev_month}",
-        f"user_result.txt {curr_month}",
-        f"live.txt {curr_month}",
-        f"itvlist.txt {curr_month}",
-        f"CCTV-13 新闻 {curr_month}",
-        f"湖南卫视 {curr_month} m3u8",
-        f"东方卫视 {curr_month}",
-        f"ipv4.m3u {curr_month}",
-        f"result.txt CCTV",
-        f"extension:m3u8 CCTV-1",
-        f"extension:txt 更新时间 {curr_month}",
-    ]
+        f"更新 {prev_month} CCTV6,http",
+        f"更新 {prev2_month} CCTV-6 http",
+        f"更新 {curr_month} CCTV6 http",
+        f"更新 {curr_month} 江西卫视,http",
+        f"更新 {prev_month} 江西卫视 http",
+        f"CCTV-6,http",
+        f"CCTV6,http",
+        f"CCTV-6 http",
+        f"CCTV6 http",
+        f"江西卫视,http",
+        f"江西卫视 http",    ]
 
     all_file_urls: Set[str] = set(FALLBACK_GITHUB_MATRIX)
 
@@ -915,18 +905,18 @@ def export_final_playlists(
         if has_channel:
             txt_lines.extend(group_txt)
 
-    with open(OUTPUT_LIVE_TXT, "w", encoding="utf-8") as f:
+    with open(OUTPUT_grok_LIVE_TXT, "w", encoding="utf-8") as f:
         f.write("\n".join(txt_lines) + "\n")
 
-    with open(OUTPUT_LIVE_M3U, "w", encoding="utf-8") as f:
+    with open(OUTPUT_grok_LIVE_M3U, "w", encoding="utf-8") as f:
         f.write("\n".join(m3u_lines) + "\n")
 
     print("=" * 78, flush=True)
     print(f"🎉 真实画面测速与多元化装配完成！")
     print(f"   - 有真实画面频道数: {total_channels_with_streams} 个")
     print(f"   - 保留可流畅播放源: {total_qualified_streams} 条 (已按分辨率+持续速度排序)")
-    print(f"   - 交付文件 (TXT 格式): {OUTPUT_LIVE_TXT}")
-    print(f"   - 交付文件 (M3U 格式): {OUTPUT_LIVE_M3U}")
+    print(f"   - 交付文件 (TXT 格式): {OUTPUT_grok_LIVE_TXT}")
+    print(f"   - 交付文件 (M3U 格式): {OUTPUT_grok_LIVE_M3U}")
     print("=" * 78, flush=True)
     print("⚠️  注意：GitHub Actions 跑在海外，测速数值会低于国内真实盒子。")
     print("   最终仍建议在国内网络用 TVBox 抽测确认。")
