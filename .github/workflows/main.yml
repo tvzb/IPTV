@@ -40,7 +40,7 @@ jobs:
     timeout-minutes: 35
 
     env:
-      # 强制全局时区为北京时间，确保第一步搜索关键词 "更新 YYYY-MM CCTV-6,http" 与 "更新 YYYY-MM CCTV6,http" 准确无误
+      # 强制全局时区为北京时间，确保第一步搜索关键词准确无误
       TZ: Asia/Shanghai
       # 强制 Python 实时输出日志，不缓存，方便在 Actions 界面实时查看五步进度
       PYTHONUNBUFFERED: "1"
@@ -70,7 +70,7 @@ jobs:
 
       - name: 🚀 4. 执行 IPTV 五步工作流核心脚本 (结合网页频道列表 + 清晰度优先排序)
         env:
-          # 优先使用您在仓库 Secrets 中配置的个人 Token (搜索配额更高)，若未设置则自动回退使用系统默认 GITHUB_TOKEN
+          # 优先使用您在仓库 Secrets 中配置的个人 Token，若未设置则自动回退使用系统默认 GITHUB_TOKEN
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
           CUSTOM_CHANNELS_JSON: ${{ github.event.inputs.custom_channels_json }}
         run: |
@@ -106,8 +106,8 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # 先拉取最新远端更改，防止在脚本运行的几分钟内手动修改了仓库导致 push 冲突
-          git pull --rebase origin ${{ github.ref_name }} || true
+          # 【修复点】加上 --autostash 参数，自动暂存本地修改的文件（如 channels.json），防止 pull 报错
+          git pull --rebase --autostash origin ${{ github.ref_name }} || true
 
           # 添加生成的中间清洗池、频道配置与最终测速排序结果
           git add live.txt live.m3u raw_sources.txt raw_sources.m3u channels.json 2>/dev/null || git add live.txt live.m3u
