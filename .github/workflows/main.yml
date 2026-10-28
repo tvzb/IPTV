@@ -1,15 +1,19 @@
 name: IPTV 五步法自动采集与测速更新
 
 on:
-  # 1. 支持在 GitHub Actions 页面手动点击运行，并可自定义测速门槛
+  # 1. 支持在网页端或 GitHub Actions 页面手动点击运行，并可接收网页端设置的自定义频道列表 JSON
   workflow_dispatch:
     inputs:
       min_speed:
         description: '最低测速门槛 (KB/s)，默认 200'
         required: false
         default: '200'
+      custom_channels_json:
+        description: '网页端设置的分类与频道列表 JSON (可选，留空则读取 channels.json 或默认列表)'
+        required: false
+        default: ''
 
-  # 2. 当修改了脚本或配置文件推送到主分支时自动触发测试
+  # 2. 当修改了脚本、channels.json 或工作流配置文件推送到主分支时自动触发测试
   push:
     branches:
       - main
@@ -17,6 +21,7 @@ on:
     paths:
       - 'main.py'
       - 'config.py'
+      - 'channels.json'
       - '.github/workflows/**'
 
 # 并发控制：如果上一次任务还在测速中，新触发的任务将取消旧任务，避免冲突
@@ -30,12 +35,12 @@ permissions:
 
 jobs:
   harvest-and-speedtest:
-    name: 搜索提取 -> 清洗 -> 初测 -> 裂变 -> 终测排序
+    name: 首页精准搜索(跳过无预览) -> 清洗 -> 初测 -> 央卫视裂变 -> 清晰度优先(1080P>576P)排序
     runs-on: ubuntu-latest
     timeout-minutes: 35
 
     env:
-      # 强制全局时区为北京时间，确保第一步搜索关键词 "更新 YYYY-MM" 及日志时间准确无误
+      # 强制全局时区为北京时间，确保第一步搜索关键词 "更新 YYYY-MM CCTV-6,http" 与 "更新 YYYY-MM CCTV6,http" 准确无误
       TZ: Asia/Shanghai
       # 强制 Python 实时输出日志，不缓存，方便在 Actions 界面实时查看五步进度
       PYTHONUNBUFFERED: "1"
@@ -52,7 +57,7 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: 🛠️ 3. 安装 FFmpeg (ffprobe 视频帧探针) 与 Python 依赖
+      - name: 🛠️ 3. 安装 FFmpeg (ffprobe 视频帧分辨率探针) 与 Python 依赖
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends ffmpeg
@@ -63,13 +68,19 @@ jobs:
             pip install requests urllib3
           fi
 
-      - name: 🚀 4. 执行 IPTV 五步工作流核心脚本
+      - name: 🚀 4. 执行 IPTV 五步工作流核心脚本 (结合网页频道列表 + 清晰度优先排序)
         env:
           # 优先使用您在仓库 Secrets 中配置的个人 Token (搜索配额更高)，若未设置则自动回退使用系统默认 GITHUB_TOKEN
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+          CUSTOM_CHANNELS_JSON: ${{ github.event.inputs.custom_channels_json }}
         run: |
           SPEED_LIMIT="${{ github.event.inputs.min_speed || '200' }}"
           echo "当前设定最低测速门槛: ${SPEED_LIMIT} KB/s"
+          # 若网页端传来了最新频道配置，同步保存至仓库 channels.json
+          if [ -n "$CUSTOM_CHANNELS_JSON" ]; then
+            echo "$CUSTOM_CHANNELS_JSON" > channels.json
+            echo "✅ 已同步保存网页端提交的自定义频道分类列表至 channels.json"
+          fi
           python main.py "${SPEED_LIMIT}"
 
       - name: 🔍 5. 校验输出文件完整性 (防空文件保护)
@@ -95,18 +106,18 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # 先拉取最新远端更改，防止在脚本运行的几分钟内您手动修改了仓库导致 push 冲突
+          # 先拉取最新远端更改，防止在脚本运行的几分钟内手动修改了仓库导致 push 冲突
           git pull --rebase origin ${{ github.ref_name }} || true
 
-          # 添加生成的中间清洗池与最终测速排序结果
-          git add live.txt live.m3u raw_sources.txt raw_sources.m3u 2>/dev/null || git add live.txt live.m3u
+          # 添加生成的中间清洗池、频道配置与最终测速排序结果
+          git add live.txt live.m3u raw_sources.txt raw_sources.m3u channels.json 2>/dev/null || git add live.txt live.m3u
 
           # 检查是否有实质内容变化，有变化才提交
           if git diff --staged --quiet; then
             echo "ℹ️ 直播源列表与上一版本完全一致，无需重复提交。"
           else
             NOW_TIME=$(date '+%Y-%m-%d %H:%M:%S')
-            git commit -m "chore(live): 自动更新央视与卫视高速直播源 [${NOW_TIME}]"
+            git commit -m "chore(live): 自动更新央视与卫视高清直播源(1920x1080优先排序) [${NOW_TIME}]"
             git push origin HEAD:${{ github.ref_name }}
             echo "🎉 最新 TVBox 直播源已成功推送到仓库！"
           fi
