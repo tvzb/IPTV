@@ -7,9 +7,9 @@ on:
       min_speed:
         description: '最低测速门槛 (KB/s)，默认 200'
         required: false
-        default: '200'
+        default: '150'
       custom_channels_json:
-        description: '网页端设置的分类与频道列表 JSON (网页触发时传入；若为空，则优先读取 config1.py / channels.json)'
+        description: '网页端设置的分类与频道列表 JSON (网页触发时传入；若为空，则优先读取 config.py / channels.json)'
         required: false
         default: ''
 
@@ -21,7 +21,6 @@ on:
     paths:
       - 'main.py'
       - 'config.py'
-      - 'config1.py'
       - 'channels.json'
       - '.github/workflows/**'
 
@@ -83,7 +82,7 @@ jobs:
             echo "$CUSTOM_CHANNELS_JSON" > channels.json
             echo "✅ 已接收网页端提交的自定义频道 JSON 并保存至 channels.json"
           else
-            echo "ℹ️ 本次为手动点击 Run workflow 或定时任务，将采用仓库中的 config1.py 官方定义"
+            echo "ℹ️ 本次为手动点击 Run workflow 或定时任务，将采用仓库中的 config.py 官方定义"
           fi
           python main.py "${SPEED_LIMIT}"
 
