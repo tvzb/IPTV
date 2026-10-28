@@ -147,22 +147,23 @@ def convert_github_item_to_raw_url(item: dict) -> str:
 
 def search_github_first_page_with_preview(
     query: str,
-    seen_blob_shas: Set[str],
+    seen_repos: Set[str],
     per_page: int = 20
 ) -> List[Tuple[str, str, str]]:
     """
-    仅搜索第 1 页 (page=1, per_page=20，与 GitHub 网页端第一页 20 个结果完全一致)：
-    同时检查：
-      1. 是否包含 `text_matches` 代码片段小预览（且预览中含有有效内容）；
-      2. Blob SHA 是否与已展开的结果重复（GitHub 网页端遇到相同文件/Fork 克隆文件会折叠为图三那种“只有链接、没有代码预览”的样式）。
-    凡是无代码预览或属于重复折叠项的，一律打印跳过原因并不打开！
+    仅搜索第 1 页 (page=1, per_page=20，与 GitHub 网页端第一页 20 个结果完全对齐)：
+    严格落实两项核心要求：
+      1. 排除无展开文字内容的纯链接：必须包含有效的 `text_matches` 代码片段预览；
+      2. 排除同仓库多文件垄断（如 hebijunge/tvbox-config 连续出现多天历史归档文件）：
+         同一个仓库只打开排名最靠前的第 1 个最优文件，后面的同仓库归档直接跳过，把名额留给后续的不同仓库；
+         绝不错误跳过 iptvjs/iptv-api 等独立仓库的优质源！
     """
     headers = get_github_search_headers()
     valid_results: List[Tuple[str, str, str]] = []
     seen_raws: Set[str] = set()
 
     encoded_q = urllib.parse.quote(query)
-    # 严格只请求 page=1，每页 20 条结果（对应图二 GitHub 首页的 20 条结果）
+    # 严格只请求 page=1，每页 20 条结果，默认按 Best Match 排序
     api_url = f"https://api.github.com/search/code?q={encoded_q}&per_page={per_page}&page=1"
 
     try:
@@ -173,26 +174,24 @@ def search_github_first_page_with_preview(
             for idx, item in enumerate(items, 1):
                 repo_name = item.get("repository", {}).get("full_name", "")
                 file_path = item.get("path", "")
-                blob_sha = item.get("sha", "")
                 display_name = f"{repo_name} · {file_path}"
 
-                # 检查是否有小部分代码预览 (text_matches)
+                # 检查是否有小部分展开代码预览 (text_matches)
                 text_matches = item.get("text_matches", [])
                 fragments = [tm.get("fragment", "").strip() for tm in text_matches if tm.get("fragment", "").strip()]
                 combined_preview = "\n".join(fragments)
 
-                # 情况 A：完全没有预览片段，或者预览片段中没有 http 直播源特征（对应图三无预览链接）
+                # 情况 A：完全没有预览片段，或者预览片段中没有 http/cctv 等直播源特征（排除图三无预览纯链接）
                 if not combined_preview or ("http" not in combined_preview.lower() and "cctv" not in combined_preview.lower()):
-                    print(f"  [跳过 {idx}/{len(items)}] {display_name} -> 无代码预览片段(图三折叠样式)，不打开", flush=True)
+                    print(f"  [跳过 {idx}/{len(items)}] {display_name} -> 纯链接(无展开代码预览)，不打开", flush=True)
                     continue
 
-                # 情况 B：文件 SHA 与已提取文件完全一致（GitHub 网页上折叠在下方只有链接没有预览的重复/Fork文件，如图三中的 tvbw/tbox2025 等）
-                if blob_sha and blob_sha in seen_blob_shas:
-                    print(f"  [跳过 {idx}/{len(items)}] {display_name} -> 克隆重复文件(无独立预览)，不打开", flush=True)
+                # 情况 B：同一个仓库只提取第 1 个最优文件，跳过后续的同仓库重复/历史归档文件 (解决图一 hebijunge 打开多条问题)
+                if repo_name in seen_repos:
+                    print(f"  [跳过 {idx}/{len(items)}] {display_name} -> 仓库【{repo_name}】已提取过最优文件，跳过该仓库历史归档", flush=True)
                     continue
 
-                if blob_sha:
-                    seen_blob_shas.add(blob_sha)
+                seen_repos.add(repo_name)
 
                 raw_url = convert_github_item_to_raw_url(item)
                 if raw_url and raw_url not in seen_raws:
@@ -274,11 +273,11 @@ def step1_search_and_extract(target_channels: Set[str]) -> List[Tuple[str, str]]
 
     raw_extracted_records: List[Tuple[str, str]] = []
     visited_raw_files: Set[str] = set()
-    seen_blob_shas: Set[str] = set()
+    seen_repos: Set[str] = set()
 
     for q in exact_queries:
         print(f"\n[*] 正在搜索首页关键词: 「{q}」 (仅第 1 页 20 条，自动跳过无预览/折叠项)...", flush=True)
-        search_items = search_github_first_page_with_preview(q, seen_blob_shas=seen_blob_shas, per_page=20)
+        search_items = search_github_first_page_with_preview(q, seen_repos=seen_repos, per_page=20)
         if not search_items:
             print(f"  [-] 未获取到「{q}」的带预览搜索结果。", flush=True)
             continue
@@ -339,6 +338,7 @@ def step2_clean_and_deduplicate(
     total_cleaned = 0
     removed_suffix_count = 0
     blocked_junk_count = 0
+    blocked_udpxy_count = 0
 
     for raw_ch, raw_url in raw_records:
         if "$" in raw_url:
@@ -351,6 +351,11 @@ def step2_clean_and_deduplicate(
 
         clean_url = clean_stream_url(raw_url)
         if not clean_url or not clean_url.startswith(("http://", "https://")):
+            continue
+
+        # 严格过滤两IP以 /rtp/ 或 /udp/ 连接的组播假源 (加载有数据但无图像、几秒后跳转)
+        if "/rtp/" in clean_url.lower() or "/udp/" in clean_url.lower():
+            blocked_udpxy_count += 1
             continue
 
         # 过滤纯 IPv6 地址，保障国内通用网络兼容性
@@ -369,6 +374,7 @@ def step2_clean_and_deduplicate(
 
     print(f"[✓] 第二步完成：", flush=True)
     print(f"    - 已清除含 '$' 尾缀标记的地址: {removed_suffix_count} 处", flush=True)
+    print(f"    - 已彻底拦截两IP相连的 /rtp/ 与 /udp/ 组播无图像假源: {blocked_udpxy_count} 条", flush=True)
     print(f"    - 已拦截纯音频广播/.swf/一次性Token假源: {blocked_junk_count} 条", flush=True)
     print(f"    - HTTP 地址全局去重后剩余唯一候选源: {total_cleaned} 条", flush=True)
     return cleaned_pool
@@ -620,7 +626,8 @@ def test_single_stream_tvbox(channel_name: str, stream_url: str) -> Tuple[str, s
 def batch_evaluate_streams(
     pool: Dict[str, List[str]],
     min_speed: float,
-    stage_title: str
+    stage_title: str,
+    base_accumulated_count: int = 0
 ) -> Dict[str, List[Tuple[str, float, float, int, int, str]]]:
     tasks: List[Tuple[str, str]] = []
     for ch, urls in pool.items():
@@ -654,10 +661,16 @@ def batch_evaluate_streams(
 
             if tested % 40 == 0 or tested == len(tasks):
                 elapsed = max(time.time() - start_t, 0.1)
-                print(
-                    f"  [国内TVBox仿真测速] {tested}/{len(tasks)} | 达标源: {passed} 条 | 耗时: {elapsed:.1f}s",
-                    flush=True
-                )
+                if base_accumulated_count > 0:
+                    print(
+                        f"  [裂变新源二次测速] {tested}/{len(tasks)} | 本轮新增达标: {passed} 条 | 累计总达标源: {base_accumulated_count + passed} 条 | 耗时: {elapsed:.1f}s",
+                        flush=True
+                    )
+                else:
+                    print(
+                        f"  [国内TVBox仿真测速] {tested}/{len(tasks)} | 达标源: {passed} 条 | 耗时: {elapsed:.1f}s",
+                        flush=True
+                    )
 
     if rejected_reasons:
         top_reasons = sorted(rejected_reasons.items(), key=lambda x: x[1], reverse=True)[:5]
@@ -680,8 +693,8 @@ def reverse_search_github_ip(ip_port: str) -> List[Tuple[str, str]]:
     if not ip_port:
         return discovered
 
-    seen_shas: Set[str] = set()
-    search_items = search_github_first_page_with_preview(f'"{ip_port}"', seen_blob_shas=seen_shas, per_page=5)
+    seen_ip_repos: Set[str] = set()
+    search_items = search_github_first_page_with_preview(f'"{ip_port}"', seen_repos=seen_ip_repos, per_page=5)
     for _, raw_url, _ in search_items:
         content = fetch_file_content(raw_url)
         for raw_ch, raw_u in extract_raw_entries_from_text(content):
@@ -831,8 +844,12 @@ def step5_merge_sort_and_export(
     with open(OUTPUT_LIVE_M3U, "w", encoding="utf-8") as f:
         f.write("\n".join(m3u_lines) + "\n")
 
+    step3_count = sum(len(v) for v in step3_qualified.values())
+    step5_count = sum(len(v) for v in step5_qualified.values())
     print("=" * 86, flush=True)
     print(f"🎉 五步工作流全部完成！")
+    print(f"   - 第三步初次搜索达标源: {step3_count} 条")
+    print(f"   - 第五步智能裂变新增达标源: {step5_count} 条 (两轮合并去重后共收录: {total_streams_ready} 条)")
     print(f"   - 覆盖网页定制频道: {total_channels_ready} 个")
     print(f"   - 最终收录真视频高速源: {total_streams_ready} 条 (已按 1920x1080 优先 -> 720x576 排序)")
     print(f"   - TVBox TXT 订阅文件: {OUTPUT_LIVE_TXT}")
@@ -950,6 +967,8 @@ def run_five_step_workflow(min_speed: float = MIN_SPEED_KBS):
         min_speed=min_speed,
         stage_title="【第三步】初次测速与视频分辨率校验 (模拟国内 TVBox 播放)"
     )
+    step3_passed_total = sum(len(v) for v in step3_qualified.values())
+    print(f"[✓] 第三步完成：初次测速获得达标源 {step3_passed_total} 条", flush=True)
 
     # 第四步：对通过校验的高速地址进行央卫视双向智能裂变 (0006_1 -> 0001~0017 & jxws -> hnws)
     fission_pool = step4_fission_high_speed_sources(
@@ -962,7 +981,8 @@ def run_five_step_workflow(min_speed: float = MIN_SPEED_KBS):
     step5_qualified = batch_evaluate_streams(
         fission_pool,
         min_speed=min_speed,
-        stage_title="【第五步(1/2)】对裂变扩容后的新地址进行二次测速与分辨率校验"
+        stage_title="【第五步(1/2)】对第四步智能裂变生成的全新候选源进行二次测速 (结果将与第三步达标源累加合并)",
+        base_accumulated_count=step3_passed_total
     )
 
     # 第五步(后半)：合并并按清晰度优先 (1920x1080 且速度快在前 -> 720x576 速度快在后) 排序输出
