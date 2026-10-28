@@ -1,72 +1,70 @@
 #EXTM3U x-tvg-url="https://live.fanmingming.com/e.xml"
-#EXTINF:-1 tvg-name="CCTV-13 新闻" group-title="央视频道",CCTV-13 新闻
-http://ali-m-l.cztv.com/channels/lantian/channel21/1080p.m3u8
-#EXTINF:-1 tvg-name="江西卫视" group-title="卫视频道",江西卫视
-http://flyriven.synology.me:8001/udp/226.0.2.54:8344
-#EXTINF:-1 tvg-name="江西卫视" group-title="卫视频道",江西卫视
-http://182.135.66.163:1888/rtp/239.94.0.79:5140
-#EXTINF:-1 tvg-name="江西卫视" group-title="卫视频道",江西卫视
-http://60.30.67.44:8834/rtp/225.1.2.29:5002
-#EXTINF:-1 tvg-name="江西卫视" group-title="卫视频道",江西卫视
-http://60.30.67.45:8834/rtp/225.1.2.29:5002
 #EXTINF:-1 tvg-name="江西卫视" group-title="卫视频道",江西卫视
 http://112.27.5.218:9901/tsfile/live/faacts/0138_1.m3u8?key=txiptv&playlive=1&authid=0
 #EXTINF:-1 tvg-name="江西卫视" group-title="卫视频道",江西卫视
-http://119.39.9.8:9901/tsfile/live/0138_1.m3u8?key=txiptv&playlive=0&authid=0
+http://flyriven.synology.me:8001/udp/226.0.2.54:8344
+#EXTINF:-1 tvg-name="江西卫视" group-title="卫视频道",江西卫视
+http://60.30.67.45:8834/rtp/225.1.2.29:5002
+#EXTINF:-1 tvg-name="江西卫视" group-title="卫视频道",江西卫视
+http://182.135.66.163:18888/rtp/239.94.0.79:5140
 #EXTINF:-1 tvg-name="江西卫视" group-title="卫视频道",江西卫视
 http://flyriven.synology.me:8001/udp/226.0.2.198:9496
 #EXTINF:-1 tvg-name="东方卫视" group-title="卫视频道",东方卫视
-http://182.135.66.163:18888/rtp/239.94.0.119:5140
+http://222.92.94.26:9889/rtp/239.49.0.95:8000
+#EXTINF:-1 tvg-name="东方卫视" group-title="卫视频道",东方卫视
+http://123.120.6.99:4022/rtp/239.3.1.136:8032
+#EXTINF:-1 tvg-name="东方卫视" group-title="卫视频道",东方卫视
+http://flyriven.synology.me:8001/udp/226.0.2.76:8520
+#EXTINF:-1 tvg-name="东方卫视" group-title="卫视频道",东方卫视
+http://bp-resource-dfl.bestv.cn/148/3/video.m3u8
+#EXTINF:-1 tvg-name="东方卫视" group-title="卫视频道",东方卫视
+http://111.193.227.77:23234/rtp/239.3.1.136:8032
+#EXTINF:-1 tvg-name="东方卫视" group-title="卫视频道",东方卫视
+http://flyriven.synology.me:8001/udp/226.0.2.175:9312
+#EXTINF:-1 tvg-name="东方卫视" group-title="卫视频道",东方卫视
+http://119.100.146.178:4022/udp/239.69.2.9:11208
 #EXTINF:-1 tvg-name="东方卫视" group-title="卫视频道",东方卫视
 http://bp-resource-dfl.bestv.cn/155/3/video.m3u8
 #EXTINF:-1 tvg-name="东方卫视" group-title="卫视频道",东方卫视
 http://123.55.3.123:9901/tsfile/live/0107_1.m3u8?key=txiptv&playlive=1&authid=0
 #EXTINF:-1 tvg-name="东方卫视" group-title="卫视频道",东方卫视
-https://bp-resource-dfl.bestv.cn/148/3/video.m3u8
-#EXTINF:-1 tvg-name="东方卫视" group-title="卫视频道",东方卫视
-http://183.222.15.202:4321/rtp/239.11.0.68:5140
-#EXTINF:-1 tvg-name="东方卫视" group-title="卫视频道",东方卫视
-http://flyriven.synology.me:8001/udp/226.0.2.175:9312
-#EXTINF:-1 tvg-name="东方卫视" group-title="卫视频道",东方卫视
-http://60.30.67.45:8834/rtp/225.1.2.31:5002
-#EXTINF:-1 tvg-name="东方卫视" group-title="卫视频道",东方卫视
-http://60.30.67.44:8834/rtp/225.1.2.31:5002
-#EXTINF:-1 tvg-name="东方卫视" group-title="卫视频道",东方卫视
-http://60.30.67.45:8834/rtp/225.1.1.247:5002
+http://182.135.66.163:1888/rtp/239.94.1.59:5140
 #EXTINF:-1 tvg-name="东方卫视" group-title="卫视频道",东方卫视
 http://ocj2.kksmg.com/ocj2/ocj2.m3u8
 #EXTINF:-1 tvg-name="东方卫视" group-title="卫视频道",东方卫视
-http://153.0.171.163:9901/tsfile/live/0107_1.m3u8?key=txiptv&playlive=1&authid=0
-#EXTINF:-1 tvg-name="北京卫视" group-title="卫视频道",北京卫视
-http://222.92.94.26:9889/rtp/239.49.8.11:9414
-#EXTINF:-1 tvg-name="北京卫视" group-title="卫视频道",北京卫视
-http://flyriven.synology.me:8001/udp/226.0.2.177:9328
+http://flyriven.synology.me:8001/udp/226.0.2.34:8184
 #EXTINF:-1 tvg-name="北京卫视" group-title="卫视频道",北京卫视
 http://60.4.28.229:8077/rtp/239.253.92.87:8014
 #EXTINF:-1 tvg-name="北京卫视" group-title="卫视频道",北京卫视
+http://123.120.6.99:4022/rtp/239.3.1.241:8000
+#EXTINF:-1 tvg-name="北京卫视" group-title="卫视频道",北京卫视
+http://doosit.dscloud.me:888/udp/239.94.0.65:5140
+#EXTINF:-1 tvg-name="北京卫视" group-title="卫视频道",北京卫视
 http://111.193.227.77:23234/rtp/239.3.1.241:8000
 #EXTINF:-1 tvg-name="北京卫视" group-title="卫视频道",北京卫视
-http://182.135.66.163:18888/rtp/239.94.0.65:5140
+http://114.254.38.234:8888/rtp/239.3.1.241:8000
 #EXTINF:-1 tvg-name="北京卫视" group-title="卫视频道",北京卫视
-http://125.42.151.80:9901/tsfile/live/0124_1.m3u8?key=txiptv&playlive=1&authid=0
+http://60.30.67.45:8834/rtp/225.1.1.113:5002
 #EXTINF:-1 tvg-name="北京卫视" group-title="卫视频道",北京卫视
-http://125.42.150.11:9901/tsfile/live/0124_1.m3u8?key=txiptv&playlive=1&authid=0
+http://61.145.188.90:60033/udp/239.77.1.4:5146
+#EXTINF:-1 tvg-name="北京卫视" group-title="卫视频道",北京卫视
+http://153.0.171.163:9901/tsfile/live/0122_1.m3u8?key=txiptv&playlive=1&authid=0
+#EXTINF:-1 tvg-name="北京卫视" group-title="卫视频道",北京卫视
+http://36.136.38.87:9901/tsfile/live/0122_1.m3u8?key=txiptv&playlive=1&authid=0
 #EXTINF:-1 tvg-name="北京卫视" group-title="卫视频道",北京卫视
 http://flyriven.synology.me:8001/udp/226.0.2.39:8224
 #EXTINF:-1 tvg-name="江苏卫视" group-title="卫视频道",江苏卫视
-http://182.135.66.163:1888/rtp/239.94.0.117:5140
+http://183.222.15.202:4321/rtp/239.11.0.76:5140
 #EXTINF:-1 tvg-name="江苏卫视" group-title="卫视频道",江苏卫视
-http://doosit.dscloud.me:888/udp/239.94.0.62:5140
+http://222.92.94.26:9889/rtp/239.49.8.16:9602
+#EXTINF:-1 tvg-name="江苏卫视" group-title="卫视频道",江苏卫视
+http://61.145.188.90:60033/udp/239.77.1.18:5146
 #EXTINF:-1 tvg-name="江苏卫视" group-title="卫视频道",江苏卫视
 http://182.135.66.163:1888/rtp/239.94.0.62:5140
 #EXTINF:-1 tvg-name="江苏卫视" group-title="卫视频道",江苏卫视
-http://60.30.67.45:8834/rtp/225.1.1.126:5002
-#EXTINF:-1 tvg-name="江苏卫视" group-title="卫视频道",江苏卫视
-http://60.30.67.44:8834/rtp/225.1.1.126:5002
+http://125.42.150.11:9901/tsfile/live/0135_1.m3u8?key=txiptv&playlive=1&authid=0
 #EXTINF:-1 tvg-name="江苏卫视" group-title="卫视频道",江苏卫视
 http://flyriven.synology.me:8001/udp/226.0.2.38:8216
-#EXTINF:-1 tvg-name="浙江卫视" group-title="卫视频道",浙江卫视
-http://ali-xwl.cztv.com/live/channel4k2160p.m3u8
 #EXTINF:-1 tvg-name="浙江卫视" group-title="卫视频道",浙江卫视
 http://ali-m-l.cztv.com/channels/lantian/channel001/1080p.m3u8
 #EXTINF:-1 tvg-name="浙江卫视" group-title="卫视频道",浙江卫视
@@ -78,89 +76,113 @@ https://ali-m-l.cztv.com/channels/lantian/channel001/1080p.m3u8
 #EXTINF:-1 tvg-name="浙江卫视" group-title="卫视频道",浙江卫视
 http://ali-m-l.cztv.com/channels/lantian/channel01/1080p.m3u8
 #EXTINF:-1 tvg-name="浙江卫视" group-title="卫视频道",浙江卫视
+http://182.135.66.163:1888/rtp/239.94.0.63:5140
+#EXTINF:-1 tvg-name="浙江卫视" group-title="卫视频道",浙江卫视
 http://ali-xwl.cztv.com/live/channel011080Plxw.m3u8
 #EXTINF:-1 tvg-name="浙江卫视" group-title="卫视频道",浙江卫视
-http://60.30.67.44:8834/rtp/225.1.1.112:5002
+http://ali-xwl.cztv.com/live/channel01720Plxw.m3u8
 #EXTINF:-1 tvg-name="浙江卫视" group-title="卫视频道",浙江卫视
-http://60.30.67.45:8834/rtp/225.1.1.112:5002
+http://l.cztvcloud.com/channels/lantian/SXpinghu3/720p.m3u8
 #EXTINF:-1 tvg-name="湖南卫视" group-title="卫视频道",湖南卫视
-http://111.193.227.77:23234/rtp/239.3.1.132:8012
+http://hlsal-ldvt.qing.mgtv.com/nn_live/nn_x64/Y2RuZXhfaWQ9YWxfaGxzX2xkdnQmZT02OTE0NjA0JnY9MSZpZD1ITldTWkdTVCZzPTcwN2RiYTc2YzJjNmJmMTQ4MmUyZGYzOWU2NWM3YWFi/HNWSZGST.m3u8
+#EXTINF:-1 tvg-name="湖南卫视" group-title="卫视频道",湖南卫视
+http://hlsal-ldvt.qing.mgtv.com/nn_live/nn_x64/dWlwPTEyNy4wLjAuMSZ1aWQ9cWluZy1jbXMmbm5fdGltZXpvbmU9OCZjZG5leF9pZD1hbF9obHNfbGR2dCZ1dWlkPTliODY4NmU5ZTM2YzYwMmMmZT02OTE0NjA0JnY9MSZpZD1ITldTWkdTVCZzPTcwN2RiYTc2YzJjNmJmMTQ4MmUyZGYzOWU2NWM3YWFi/HNWSZGST.m3u8
+#EXTINF:-1 tvg-name="湖南卫视" group-title="卫视频道",湖南卫视
+http://183.220.107.138:4022/rtp/239.11.0.119:5140
+#EXTINF:-1 tvg-name="湖南卫视" group-title="卫视频道",湖南卫视
+http://183.222.15.202:4321/rtp/239.11.0.119:5140
+#EXTINF:-1 tvg-name="湖南卫视" group-title="卫视频道",湖南卫视
+http://doosit.dscloud.me:888/udp/239.94.0.61:5140
 #EXTINF:-1 tvg-name="湖南卫视" group-title="卫视频道",湖南卫视
 http://153.0.171.163:9901/tsfile/live/0128_1.m3u8?key=txiptv&playlive=1&authid=0
-#EXTINF:-1 tvg-name="湖南卫视" group-title="卫视频道",湖南卫视
-http://flyriven.synology.me:8001/udp/226.0.2.33:8176
 #EXTINF:-1 tvg-name="辽宁卫视" group-title="卫视频道",辽宁卫视
-http://119.39.9.8:9901/tsfile/live/0121_1.m3u8?key=txiptv&playlive=0&authid=0
+http://183.222.15.202:4321/rtp/239.11.0.118:5140
+#EXTINF:-1 tvg-name="辽宁卫视" group-title="卫视频道",辽宁卫视
+http://60.30.67.45:8834/rtp/225.1.1.154:5002
+#EXTINF:-1 tvg-name="辽宁卫视" group-title="卫视频道",辽宁卫视
+http://60.30.67.44:8834/rtp/225.1.1.154:5002
+#EXTINF:-1 tvg-name="辽宁卫视" group-title="卫视频道",辽宁卫视
+http://36.136.38.87:9901/tsfile/live/0121_1.m3u8?key=txiptv&playlive=1&authid=0
 #EXTINF:-1 tvg-name="辽宁卫视" group-title="卫视频道",辽宁卫视
 http://flyriven.synology.me:8001/udp/226.0.2.35:8192
 #EXTINF:-1 tvg-name="安徽卫视" group-title="卫视频道",安徽卫视
-http://183.222.15.202:4321/rtp/239.11.0.117:5140
-#EXTINF:-1 tvg-name="安徽卫视" group-title="卫视频道",安徽卫视
-http://123.120.6.99:4022/rtp/239.3.1.211:8064
-#EXTINF:-1 tvg-name="安徽卫视" group-title="卫视频道",安徽卫视
-http://60.4.28.229:8077/rtp/239.253.92.209:6566
+http://114.241.110.52:85/tsfile/live/29/1029_1.m3u8?key=txiptv
 #EXTINF:-1 tvg-name="安徽卫视" group-title="卫视频道",安徽卫视
 http://144.255.16.190:6688/udp/239.21.1.159:5002
 #EXTINF:-1 tvg-name="安徽卫视" group-title="卫视频道",安徽卫视
-http://182.135.66.163:1888/rtp/239.94.0.85:5140
+http://60.30.67.44:8834/rtp/225.1.1.127:5002
 #EXTINF:-1 tvg-name="安徽卫视" group-title="卫视频道",安徽卫视
-http://119.100.146.178:4022/udp/239.69.1.70:10060
+http://114.254.38.234:8888/rtp/239.3.1.211:8064
+#EXTINF:-1 tvg-name="安徽卫视" group-title="卫视频道",安徽卫视
+http://60.30.67.45:8834/rtp/225.1.1.127:5002
+#EXTINF:-1 tvg-name="安徽卫视" group-title="卫视频道",安徽卫视
+http://153.0.171.163:9901/tsfile/live/0130_1.m3u8?key=txiptv&playlive=1&authid=0
+#EXTINF:-1 tvg-name="安徽卫视" group-title="卫视频道",安徽卫视
+http://flyriven.synology.me:8001/udp/226.0.2.37:8208
 #EXTINF:-1 tvg-name="兵团卫视" group-title="卫视频道",兵团卫视
-http://183.222.15.202:4321/rtp/239.11.0.204:5140
-#EXTINF:-1 tvg-name="兵团卫视" group-title="卫视频道",兵团卫视
-http://flyriven.synology.me:8001/udp/226.0.2.62:8408
-#EXTINF:-1 tvg-name="兵团卫视" group-title="卫视频道",兵团卫视
-http://doosit.dscloud.me:888/udp/239.94.0.102:5140
-#EXTINF:-1 tvg-name="兵团卫视" group-title="卫视频道",兵团卫视
-http://182.135.66.163:18888/rtp/239.94.0.102:5140
+http://222.92.158.110:9889/rtp/239.49.0.240:8000
 #EXTINF:-1 tvg-name="重庆卫视" group-title="卫视频道",重庆卫视
-http://119.100.146.178:4022/udp/239.69.1.149:10530
-#EXTINF:-1 tvg-name="重庆卫视" group-title="卫视频道",重庆卫视
-http://doosit.dscloud.me:888/udp/239.94.0.82:5140
+http://flyriven.synology.me:8001/udp/226.0.2.174:9304
 #EXTINF:-1 tvg-name="重庆卫视" group-title="卫视频道",重庆卫视
 http://111.193.227.77:23234/rtp/239.3.1.122:8160
 #EXTINF:-1 tvg-name="重庆卫视" group-title="卫视频道",重庆卫视
-http://182.135.66.163:18888/rtp/239.94.0.82:5140
+http://182.135.66.163:1888/rtp/239.94.0.82:5140
 #EXTINF:-1 tvg-name="重庆卫视" group-title="卫视频道",重庆卫视
-http://119.39.9.8:9901/tsfile/live/0142_1.m3u8?key=txiptv&playlive=0&authid=0
+http://119.100.146.178:4022/udp/239.69.1.149:10530
+#EXTINF:-1 tvg-name="重庆卫视" group-title="卫视频道",重庆卫视
+http://123.120.6.99:4022/rtp/239.3.1.122:8160
 #EXTINF:-1 tvg-name="重庆卫视" group-title="卫视频道",重庆卫视
 http://flyriven.synology.me:8001/udp/226.0.2.50:8312
 #EXTINF:-1 tvg-name="东南卫视" group-title="卫视频道",东南卫视
-http://118.122.144.115:8888/newlive/live/hls/20/live.m3u8
+http://live.zohi.tv/video/s10001-fztv-3/index.m3u8
 #EXTINF:-1 tvg-name="东南卫视" group-title="卫视频道",东南卫视
-http://doosit.dscloud.me:888/udp/239.94.0.80:5140
+http://123.120.6.99:4022/rtp/239.3.1.156:8148
 #EXTINF:-1 tvg-name="东南卫视" group-title="卫视频道",东南卫视
-http://182.135.66.163:18888/rtp/239.94.0.80:5140
+http://111.193.227.77:23234/rtp/239.3.1.156:8148
+#EXTINF:-1 tvg-name="东南卫视" group-title="卫视频道",东南卫视
+http://flyriven.synology.me:8001/udp/226.0.2.40:8232
 #EXTINF:-1 tvg-name="东南卫视" group-title="卫视频道",东南卫视
 https://vd2.bdstatic.com/mda-ncnfhdbt5mucyi3w/cae_h264_delogo/1648033513910900148/mda-ncnfhdbt5mucyi3w.mp4
 #EXTINF:-1 tvg-name="甘肃卫视" group-title="卫视频道",甘肃卫视
+http://121.19.134.149:808/tsfile/live/0141_1.m3u8?key=txiptv&playlive=1&authid=0
+#EXTINF:-1 tvg-name="甘肃卫视" group-title="卫视频道",甘肃卫视
 http://222.92.94.26:9889/rtp/239.49.0.250:8000
 #EXTINF:-1 tvg-name="甘肃卫视" group-title="卫视频道",甘肃卫视
-http://flyriven.synology.me:8001/udp/226.0.2.55:8352
-#EXTINF:-1 tvg-name="甘肃卫视" group-title="卫视频道",甘肃卫视
-http://182.135.66.163:1888/rtp/239.94.0.99:5140
-#EXTINF:-1 tvg-name="甘肃卫视" group-title="卫视频道",甘肃卫视
-http://119.39.9.8:9901/tsfile/live/0141_1.m3u8?key=txiptv&playlive=0&authid=0
-#EXTINF:-1 tvg-name="甘肃卫视" group-title="卫视频道",甘肃卫视
-http://60.30.67.44:8834/rtp/225.1.1.30:5002
+http://119.100.146.178:4022/udp/239.69.2.23:11292
 #EXTINF:-1 tvg-name="甘肃卫视" group-title="卫视频道",甘肃卫视
 http://60.30.67.45:8834/rtp/225.1.1.30:5002
+#EXTINF:-1 tvg-name="甘肃卫视" group-title="卫视频道",甘肃卫视
+http://60.30.67.44:8834/rtp/225.1.1.30:5002
 #EXTINF:-1 tvg-name="广东卫视" group-title="卫视频道",广东卫视
-http://183.222.15.202:4321/rtp/239.11.0.115:5140
+http://121.10.7.16:4000/udp/239.77.0.65:5146
 #EXTINF:-1 tvg-name="广东卫视" group-title="卫视频道",广东卫视
-http://flyriven.synology.me:8001/udp/226.0.2.45:8272
+http://182.135.66.163:18888/rtp/239.94.0.114:5140
+#EXTINF:-1 tvg-name="广东卫视" group-title="卫视频道",广东卫视
+http://222.92.158.110:9889/rtp/239.49.1.24:8000
+#EXTINF:-1 tvg-name="广东卫视" group-title="卫视频道",广东卫视
+http://121.10.7.16:4000/udp/239.77.0.66:5146
+#EXTINF:-1 tvg-name="广东卫视" group-title="卫视频道",广东卫视
+http://183.220.107.138:4022/rtp/239.11.0.115:5140
+#EXTINF:-1 tvg-name="广东卫视" group-title="卫视频道",广东卫视
+http://121.10.7.16:4000/udp/239.77.1.19:5146
+#EXTINF:-1 tvg-name="广东卫视" group-title="卫视频道",广东卫视
+http://60.30.67.45:8834/rtp/225.1.1.116:5002
+#EXTINF:-1 tvg-name="广东卫视" group-title="卫视频道",广东卫视
+http://61.145.188.90:60033/udp/239.77.0.166:5146
 #EXTINF:-1 tvg-name="广西卫视" group-title="卫视频道",广西卫视
 https://hlscdn.liangtv.cn/live/0c4ef3a44b934cacb8b47121dfada66c/d7e04258157b480dae53883cc6f8123b.m3u8
 #EXTINF:-1 tvg-name="广西卫视" group-title="卫视频道",广西卫视
 https://hlscdn.liangtv.cn/live/de0f97348eb84f62aa6b7d8cf0430770/dd505d87880c478f901f38560ca4d4e6.m3u8
 #EXTINF:-1 tvg-name="广西卫视" group-title="卫视频道",广西卫视
-http://60.30.67.45:8834/rtp/225.1.2.81:5002
+http://222.92.94.26:9889/rtp/239.49.8.10:8000
 #EXTINF:-1 tvg-name="广西卫视" group-title="卫视频道",广西卫视
-http://60.30.67.44:8834/rtp/225.1.2.81:5002
+http://doosit.dscloud.me:888/udp/239.94.0.89:5140
 #EXTINF:-1 tvg-name="广西卫视" group-title="卫视频道",广西卫视
-http://1.198.67.43:9901/tsfile/live/0113_1.m3u8?key=txiptv&playlive=1&authid=0
+http://182.135.66.163:18888/rtp/239.94.0.89:5140
 #EXTINF:-1 tvg-name="广西卫视" group-title="卫视频道",广西卫视
-http://119.39.9.8:9901/tsfile/live/0113_1.m3u8?key=txiptv&playlive=0&authid=0
+http://36.136.38.87:9901/tsfile/live/0113_1.m3u8?key=txiptv&playlive=1&authid=0
+#EXTINF:-1 tvg-name="广西卫视" group-title="卫视频道",广西卫视
+http://114.241.110.52:85/tsfile/live/46/1046_1.m3u8?key=txiptv
 #EXTINF:-1 tvg-name="广西卫视" group-title="卫视频道",广西卫视
 http://flyriven.synology.me:8001/udp/226.0.2.46:8280
 #EXTINF:-1 tvg-name="广西卫视" group-title="卫视频道",广西卫视
@@ -168,115 +190,151 @@ http://111.193.227.77:23234/rtp/239.3.1.39:8300
 #EXTINF:-1 tvg-name="广西卫视" group-title="卫视频道",广西卫视
 http://123.120.6.99:4022/rtp/239.3.1.39:8300
 #EXTINF:-1 tvg-name="贵州卫视" group-title="卫视频道",贵州卫视
-http://123.120.6.99:4022/rtp/239.3.1.149:8076
+http://121.19.134.149:808/tsfile/live/1023_1.m3u8?key=txiptv&playlive=1&authid=0
+#EXTINF:-1 tvg-name="贵州卫视" group-title="卫视频道",贵州卫视
+http://183.222.15.202:4321/rtp/239.11.0.51:5140
+#EXTINF:-1 tvg-name="贵州卫视" group-title="卫视频道",贵州卫视
+http://60.4.28.229:8077/rtp/239.253.92.105:6055
 #EXTINF:-1 tvg-name="贵州卫视" group-title="卫视频道",贵州卫视
 http://doosit.dscloud.me:888/udp/239.94.0.83:5140
 #EXTINF:-1 tvg-name="贵州卫视" group-title="卫视频道",贵州卫视
+http://36.136.38.87:9901/tsfile/live/0120_1.m3u8?key=txiptv&playlive=1&authid=0
+#EXTINF:-1 tvg-name="贵州卫视" group-title="卫视频道",贵州卫视
 http://flyriven.synology.me:8001/udp/226.0.2.43:8256
 #EXTINF:-1 tvg-name="海南卫视" group-title="卫视频道",海南卫视
-http://183.222.15.202:4321/rtp/239.11.0.193:5140
+http://60.4.28.229:8077/rtp/239.253.93.155:6323
 #EXTINF:-1 tvg-name="海南卫视" group-title="卫视频道",海南卫视
-http://60.30.67.44:8834/rtp/225.1.2.82:5002
+http://36.136.38.87:9901/tsfile/live/0114_1.m3u8?key=txiptv&playlive=1&authid=0
 #EXTINF:-1 tvg-name="海南卫视" group-title="卫视频道",海南卫视
-http://144.255.16.190:6688/udp/239.21.2.14:5002
+http://114.254.38.234:8888/rtp/239.3.1.45:8304
 #EXTINF:-1 tvg-name="海南卫视" group-title="卫视频道",海南卫视
-http://flyriven.synology.me:8001/udp/226.0.2.61:8400
+http://111.193.227.77:23234/rtp/239.3.1.45:8304
+#EXTINF:-1 tvg-name="海南卫视" group-title="卫视频道",海南卫视
+http://123.120.6.99:4022/rtp/239.3.1.45:8304
 #EXTINF:-1 tvg-name="海南卫视" group-title="卫视频道",海南卫视
 http://182.135.66.163:1888/rtp/239.94.0.100:5140
-#EXTINF:-1 tvg-name="海南卫视" group-title="卫视频道",海南卫视
-http://182.135.66.163:18888/rtp/239.94.0.100:5140
-#EXTINF:-1 tvg-name="海南卫视" group-title="卫视频道",海南卫视
-http://doosit.dscloud.me:888/udp/239.94.0.100:5140
 #EXTINF:-1 tvg-name="河北卫视" group-title="卫视频道",河北卫视
-http://60.30.67.44:8834/rtp/225.1.2.27:5002
+https://event.pull.hebtv.com/live/live101.m3u8
 #EXTINF:-1 tvg-name="河北卫视" group-title="卫视频道",河北卫视
-http://182.135.66.163:18888/rtp/239.94.0.86:5140
+http://183.220.107.138:4022/rtp/239.11.0.31:5140
+#EXTINF:-1 tvg-name="河北卫视" group-title="卫视频道",河北卫视
+http://123.120.6.99:4022/rtp/239.3.1.148:8072
+#EXTINF:-1 tvg-name="河北卫视" group-title="卫视频道",河北卫视
+http://119.100.146.178:4022/udp/239.69.1.157:10578
+#EXTINF:-1 tvg-name="河北卫视" group-title="卫视频道",河北卫视
+http://144.255.16.190:6688/udp/239.21.1.168:5002
 #EXTINF:-1 tvg-name="河北卫视" group-title="卫视频道",河北卫视
 http://event.pull.hebtv.com/jishi/weishi_tingyun.m3u8
 #EXTINF:-1 tvg-name="河北卫视" group-title="卫视频道",河北卫视
+http://36.136.38.87:9901/tsfile/live/0117_1.m3u8?key=txiptv&playlive=1&authid=0
+#EXTINF:-1 tvg-name="河北卫视" group-title="卫视频道",河北卫视
 http://flyriven.synology.me:8001/udp/226.0.2.65:8432
 #EXTINF:-1 tvg-name="河南卫视" group-title="卫视频道",河南卫视
-http://182.135.66.163:1888/rtp/239.94.0.88:5140
+http://flyriven.synology.me:8001/udp/226.0.2.52:8328
 #EXTINF:-1 tvg-name="河南卫视" group-title="卫视频道",河南卫视
-http://60.30.67.44:8834/rtp/225.1.2.61:5002
+http://119.100.146.178:4022/udp/239.69.1.168:10644
 #EXTINF:-1 tvg-name="河南卫视" group-title="卫视频道",河南卫视
-http://119.39.9.8:9901/tsfile/live/0139_1.m3u8?key=txiptv&playlive=0&authid=0
+http://222.92.94.26:9889/rtp/239.49.8.29:8000
 #EXTINF:-1 tvg-name="河南卫视" group-title="卫视频道",河南卫视
 http://flyriven.synology.me:8001/udp/226.0.2.195:9472
 #EXTINF:-1 tvg-name="黑龙江卫视" group-title="卫视频道",黑龙江卫视
-http://60.4.28.229:8077/rtp/239.253.92.85:8016
-#EXTINF:-1 tvg-name="黑龙江卫视" group-title="卫视频道",黑龙江卫视
-http://118.122.144.115:8888/newlive/live/hls/38/live.m3u8
-#EXTINF:-1 tvg-name="黑龙江卫视" group-title="卫视频道",黑龙江卫视
-http://153.0.171.163:9901/tsfile/live/0143_1.m3u8?key=txiptv&playlive=1&authid=0
-#EXTINF:-1 tvg-name="黑龙江卫视" group-title="卫视频道",黑龙江卫视
 http://l.cztvcloud.com/channels/lantian/SXyuyao3/720p.m3u8
+#EXTINF:-1 tvg-name="黑龙江卫视" group-title="卫视频道",黑龙江卫视
+http://flyriven.synology.me:8001/udp/226.0.2.48:8296
 #EXTINF:-1 tvg-name="湖北卫视" group-title="卫视频道",湖北卫视
-http://144.255.16.190:6688/udp/239.21.1.163:5002
+http://flyriven.synology.me:8001/udp/226.0.2.150:9112
 #EXTINF:-1 tvg-name="湖北卫视" group-title="卫视频道",湖北卫视
-http://153.0.171.163:9901/tsfile/live/0132_1.m3u8?key=txiptv&playlive=1&authid=0
+http://182.135.66.163:18888/rtp/239.94.0.84:5140
+#EXTINF:-1 tvg-name="湖北卫视" group-title="卫视频道",湖北卫视
+http://60.30.67.45:8834/rtp/225.1.1.147:5002
 #EXTINF:-1 tvg-name="湖北卫视" group-title="卫视频道",湖北卫视
 http://flyriven.synology.me:8001/udp/226.0.2.49:8304
 #EXTINF:-1 tvg-name="吉林卫视" group-title="卫视频道",吉林卫视
 http://183.222.15.202:4321/rtp/239.11.0.35:5140
 #EXTINF:-1 tvg-name="吉林卫视" group-title="卫视频道",吉林卫视
-http://222.92.158.110:9889/rtp/239.49.8.113:8000
+http://61.145.188.90:60033/udp/239.77.1.111:5146
 #EXTINF:-1 tvg-name="吉林卫视" group-title="卫视频道",吉林卫视
-http://60.30.67.45:8834/rtp/225.1.2.26:5002
+http://123.120.6.99:4022/rtp/239.3.1.240:8172
 #EXTINF:-1 tvg-name="吉林卫视" group-title="卫视频道",吉林卫视
-http://60.30.67.44:8834/rtp/225.1.2.26:5002
+http://60.4.28.229:8077/rtp/239.253.92.202:6147
 #EXTINF:-1 tvg-name="吉林卫视" group-title="卫视频道",吉林卫视
-http://182.135.66.163:18888/rtp/239.94.0.91:5140
+http://flyriven.synology.me:8001/udp/226.0.2.58:8376
+#EXTINF:-1 tvg-name="吉林卫视" group-title="卫视频道",吉林卫视
+http://153.0.171.163:9901/tsfile/live/0116_1.m3u8?key=txiptv&playlive=1&authid=0
+#EXTINF:-1 tvg-name="吉林卫视" group-title="卫视频道",吉林卫视
+http://36.136.38.87:9901/tsfile/live/0116_1.m3u8?key=txiptv&playlive=1&authid=0
+#EXTINF:-1 tvg-name="吉林卫视" group-title="卫视频道",吉林卫视
+http://flyriven.synology.me:8001/udp/226.0.2.199:9504
+#EXTINF:-1 tvg-name="康巴卫视" group-title="卫视频道",康巴卫视
+http://doosit.dscloud.me:888/udp/239.94.0.78:5140
+#EXTINF:-1 tvg-name="康巴卫视" group-title="卫视频道",康巴卫视
+http://182.135.66.163:18888/rtp/239.94.0.78:5140
 #EXTINF:-1 tvg-name="内蒙古卫视" group-title="卫视频道",内蒙古卫视
 https://ali-m-l.cztv.com/channels/lantian/channel007/1080p.m3u8
 #EXTINF:-1 tvg-name="内蒙古卫视" group-title="卫视频道",内蒙古卫视
 http://play1-qk.nmtv.cn/live/1769652018126032.m3u8
 #EXTINF:-1 tvg-name="内蒙古卫视" group-title="卫视频道",内蒙古卫视
-http://118.193.115.2:9901/tsfile/live/0109_1.m3u8?key=txiptv&playlive=1&authid=0
+http://114.241.110.52:85/tsfile/live/50/1050_1.m3u8?key=txiptv
 #EXTINF:-1 tvg-name="内蒙古卫视" group-title="卫视频道",内蒙古卫视
-http://114.254.38.234:8888/rtp/239.3.1.43:8176
-#EXTINF:-1 tvg-name="内蒙古卫视" group-title="卫视频道",内蒙古卫视
-http://222.92.158.110:9889/rtp/239.49.0.180:8000
-#EXTINF:-1 tvg-name="内蒙古卫视" group-title="卫视频道",内蒙古卫视
-http://222.92.94.26:9889/rtp/239.49.0.180:8000
-#EXTINF:-1 tvg-name="内蒙古卫视" group-title="卫视频道",内蒙古卫视
-http://123.120.6.99:4022/rtp/239.3.1.43:8176
+http://flyriven.synology.me:8001/udp/226.0.2.63:8416
+#EXTINF:-1 tvg-name="宁夏卫视" group-title="卫视频道",宁夏卫视
+http://182.135.66.163:18888/rtp/239.94.0.96:5140
+#EXTINF:-1 tvg-name="宁夏卫视" group-title="卫视频道",宁夏卫视
+http://153.0.171.163:9901/tsfile/live/0112_1.m3u8?key=txiptv&playlive=1&authid=0
+#EXTINF:-1 tvg-name="宁夏卫视" group-title="卫视频道",宁夏卫视
+http://222.92.158.110:9889/rtp/239.49.0.171:8000
+#EXTINF:-1 tvg-name="青海卫视" group-title="卫视频道",青海卫视
+http://114.241.110.52:85/tsfile/live/51/1051_1.m3u8?key=txiptv
 #EXTINF:-1 tvg-name="青海卫视" group-title="卫视频道",青海卫视
 http://183.222.15.202:4321/rtp/239.11.0.56:5140
+#EXTINF:-1 tvg-name="青海卫视" group-title="卫视频道",青海卫视
+http://121.19.134.149:808/tsfile/live/0140_1.m3u8?key=txiptv&playlive=1&authid=0
+#EXTINF:-1 tvg-name="青海卫视" group-title="卫视频道",青海卫视
+http://114.254.38.234:8888/rtp/239.3.1.44:8184
+#EXTINF:-1 tvg-name="青海卫视" group-title="卫视频道",青海卫视
+http://flyriven.synology.me:8001/udp/226.0.2.59:8384
 #EXTINF:-1 tvg-name="青海卫视" group-title="卫视频道",青海卫视
 http://doosit.dscloud.me:888/udp/239.94.0.95:5140
 #EXTINF:-1 tvg-name="青海卫视" group-title="卫视频道",青海卫视
 http://182.135.66.163:1888/rtp/239.94.0.95:5140
 #EXTINF:-1 tvg-name="青海卫视" group-title="卫视频道",青海卫视
-http://flyriven.synology.me:8001/udp/226.0.2.59:8384
+http://153.0.171.163:9901/tsfile/live/0140_1.m3u8?key=txiptv&playlive=1&authid=0
 #EXTINF:-1 tvg-name="青海卫视" group-title="卫视频道",青海卫视
 http://111.193.227.77:23234/rtp/239.3.1.44:8184
 #EXTINF:-1 tvg-name="青海卫视" group-title="卫视频道",青海卫视
-http://123.120.6.99:4022/rtp/239.3.1.44:8184
-#EXTINF:-1 tvg-name="青海卫视" group-title="卫视频道",青海卫视
-http://60.30.67.45:8834/rtp/225.1.1.54:5002
-#EXTINF:-1 tvg-name="青海卫视" group-title="卫视频道",青海卫视
-http://60.30.67.44:8834/rtp/225.1.1.54:5002
+http://182.135.66.163:18888/rtp/239.94.0.95:5140
 #EXTINF:-1 tvg-name="山东卫视" group-title="卫视频道",山东卫视
-http://60.4.28.229:8077/rtp/239.253.92.207:8109
+http://123.120.6.99:4022/rtp/239.3.1.209:8052
 #EXTINF:-1 tvg-name="山东卫视" group-title="卫视频道",山东卫视
-http://111.193.227.77:23234/rtp/239.3.1.209:8052
+http://123.55.3.123:9901/tsfile/live/0131_1.m3u8?key=txiptv&playlive=1&authid=0
+#EXTINF:-1 tvg-name="山东卫视" group-title="卫视频道",山东卫视
+http://36.136.38.87:9901/tsfile/live/0131_1.m3u8?key=txiptv&playlive=1&authid=0
+#EXTINF:-1 tvg-name="山东卫视" group-title="卫视频道",山东卫视
+http://flyriven.synology.me:8001/udp/226.0.2.51:8320
+#EXTINF:-1 tvg-name="山东卫视" group-title="卫视频道",山东卫视
+http://111.193.227.77:23234/rtp/239.3.1.52:4120
 #EXTINF:-1 tvg-name="山东卫视" group-title="卫视频道",山东卫视
 http://123.120.6.99:4022/rtp/239.3.1.52:4120
 #EXTINF:-1 tvg-name="山东卫视" group-title="卫视频道",山东卫视
-http://doosit.dscloud.me:888/udp/239.94.0.106:5140
-#EXTINF:-1 tvg-name="山东卫视" group-title="卫视频道",山东卫视
 http://182.135.66.163:1888/rtp/239.94.0.106:5140
 #EXTINF:-1 tvg-name="山东卫视" group-title="卫视频道",山东卫视
-http://60.4.28.229:8077/rtp/239.253.92.106:6135
-#EXTINF:-1 tvg-name="山东卫视" group-title="卫视频道",山东卫视
-http://182.135.66.163:18888/rtp/239.94.0.106:5140
+http://114.254.38.234:8888/rtp/239.3.1.52:4120
 #EXTINF:-1 tvg-name="山西卫视" group-title="卫视频道",山西卫视
 http://119.39.9.8:9901/tsfile/live/0118_1.m3u8
 #EXTINF:-1 tvg-name="山西卫视" group-title="卫视频道",山西卫视
+http://flyriven.synology.me:8001/udp/226.0.2.152:9128
+#EXTINF:-1 tvg-name="山西卫视" group-title="卫视频道",山西卫视
+http://222.92.158.110:9889/rtp/239.49.1.55:8000
+#EXTINF:-1 tvg-name="山西卫视" group-title="卫视频道",山西卫视
+http://222.92.94.26:9889/rtp/239.49.1.55:8000
+#EXTINF:-1 tvg-name="山西卫视" group-title="卫视频道",山西卫视
 http://doosit.dscloud.me:888/udp/239.94.0.93:5140
 #EXTINF:-1 tvg-name="山西卫视" group-title="卫视频道",山西卫视
+http://flyriven.synology.me:8001/udp/226.0.2.11:8000
+#EXTINF:-1 tvg-name="山西卫视" group-title="卫视频道",山西卫视
 http://183.222.15.202:4321/rtp/239.11.0.32:5140
+#EXTINF:-1 tvg-name="山西卫视" group-title="卫视频道",山西卫视
+http://183.220.107.138:4022/rtp/239.11.0.32:5140
 #EXTINF:-1 tvg-name="山西卫视" group-title="卫视频道",山西卫视
 http://111.193.227.77:23234/rtp/239.3.1.42:8172
 #EXTINF:-1 tvg-name="山西卫视" group-title="卫视频道",山西卫视
@@ -284,44 +342,68 @@ http://123.120.6.99:4022/rtp/239.3.1.42:8172
 #EXTINF:-1 tvg-name="陕西卫视" group-title="卫视频道",陕西卫视
 http://183.222.15.202:4321/rtp/239.11.0.54:5140
 #EXTINF:-1 tvg-name="陕西卫视" group-title="卫视频道",陕西卫视
+http://183.220.107.138:4022/rtp/239.11.0.54:5140
+#EXTINF:-1 tvg-name="陕西卫视" group-title="卫视频道",陕西卫视
+http://222.92.158.110:9889/rtp/239.49.1.74:8000
+#EXTINF:-1 tvg-name="陕西卫视" group-title="卫视频道",陕西卫视
+http://153.0.171.163:9901/tsfile/live/0136_1.m3u8?key=txiptv&playlive=1&authid=0
+#EXTINF:-1 tvg-name="陕西卫视" group-title="卫视频道",陕西卫视
+http://36.136.38.87:9901/tsfile/live/0136_1.m3u8?key=txiptv&playlive=1&authid=0
+#EXTINF:-1 tvg-name="陕西卫视" group-title="卫视频道",陕西卫视
+http://114.241.110.52:85/tsfile/live/48/1048_1.m3u8?key=txiptv
+#EXTINF:-1 tvg-name="陕西卫视" group-title="卫视频道",陕西卫视
 http://flyriven.synology.me:8001/udp/226.0.2.53:8336
 #EXTINF:-1 tvg-name="陕西卫视" group-title="卫视频道",陕西卫视
-http://60.30.67.45:8834/rtp/225.1.1.41:5002
+http://123.120.6.99:4022/rtp/239.3.1.41:8140
+#EXTINF:-1 tvg-name="陕西卫视" group-title="卫视频道",陕西卫视
+http://111.193.227.77:23234/rtp/239.3.1.41:8140
 #EXTINF:-1 tvg-name="陕西卫视" group-title="卫视频道",陕西卫视
 http://60.30.67.44:8834/rtp/225.1.1.41:5002
+#EXTINF:-1 tvg-name="陕西卫视" group-title="卫视频道",陕西卫视
+http://60.30.67.45:8834/rtp/225.1.1.41:5002
 #EXTINF:-1 tvg-name="深圳卫视" group-title="卫视频道",深圳卫视
-http://183.222.15.202:4321/rtp/239.11.0.71:5140
+http://60.4.28.229:8077/rtp/239.253.92.86:8017
+#EXTINF:-1 tvg-name="深圳卫视" group-title="卫视频道",深圳卫视
+http://111.193.227.77:23234/rtp/239.3.1.134:8020
+#EXTINF:-1 tvg-name="深圳卫视" group-title="卫视频道",深圳卫视
+http://flyriven.synology.me:8001/udp/226.0.2.147:9088
 #EXTINF:-1 tvg-name="深圳卫视" group-title="卫视频道",深圳卫视
 http://yncbn.ks-cdn.gitv.tv/gitv_live/G_SHENZHEN-HQ/G_SHENZHEN-HQ.m3u8
 #EXTINF:-1 tvg-name="深圳卫视" group-title="卫视频道",深圳卫视
-http://119.39.9.8:9901/tsfile/live/0126_1.m3u8?key=txiptv&playlive=0&authid=0
+http://flyriven.synology.me:8001/udp/226.0.2.47:8288
 #EXTINF:-1 tvg-name="四川卫视" group-title="卫视频道",四川卫视
-http://182.135.66.163:1888/rtp/239.94.0.60:5140
+http://doosit.dscloud.me:888/udp/239.94.0.115:5140
 #EXTINF:-1 tvg-name="四川卫视" group-title="卫视频道",四川卫视
-http://119.39.9.8:9901/tsfile/live/0123_1.m3u8?key=txiptv&playlive=0&authid=0
+http://121.10.7.16:4000/udp/239.77.1.215:5146
 #EXTINF:-1 tvg-name="四川卫视" group-title="卫视频道",四川卫视
-http://flyriven.synology.me:8001/udp/226.0.2.42:8248
-#EXTINF:-1 tvg-name="天津卫视" group-title="卫视频道",天津卫视
-http://183.222.15.202:4321/rtp/239.11.0.123:5140
-#EXTINF:-1 tvg-name="天津卫视" group-title="卫视频道",天津卫视
-http://114.254.38.234:8888/rtp/239.3.1.141:1234
-#EXTINF:-1 tvg-name="天津卫视" group-title="卫视频道",天津卫视
-http://144.255.16.190:6688/udp/239.21.1.165:5002
-#EXTINF:-1 tvg-name="天津卫视" group-title="卫视频道",天津卫视
-http://119.39.9.8:9901/tsfile/live/0135_1.m3u8?key=txiptv&playlive=0&authid=0
+http://114.254.38.234:8888/rtp/239.3.1.29:8288
+#EXTINF:-1 tvg-name="四川卫视" group-title="卫视频道",四川卫视
+http://114.241.110.52:85/tsfile/live/36/1036_1.m3u8?key=txiptv
+#EXTINF:-1 tvg-name="四川卫视" group-title="卫视频道",四川卫视
+http://111.193.227.77:23234/rtp/239.3.1.29:8288
+#EXTINF:-1 tvg-name="四川卫视" group-title="卫视频道",四川卫视
+http://123.120.6.99:4022/rtp/239.3.1.29:8288
 #EXTINF:-1 tvg-name="西藏卫视" group-title="卫视频道",西藏卫视
 http://121.19.134.149:808/tsfile/live/0111_1.m3u8?key=txiptv&playlive=1&authid=0
 #EXTINF:-1 tvg-name="西藏卫视" group-title="卫视频道",西藏卫视
-http://182.135.66.163:18888/rtp/239.94.0.97:5140
+http://222.92.94.26:9889/rtp/239.49.0.245:8000
 #EXTINF:-1 tvg-name="西藏卫视" group-title="卫视频道",西藏卫视
 http://222.92.158.110:9889/rtp/239.49.0.245:8000
-#EXTINF:-1 tvg-name="新疆卫视" group-title="卫视频道",新疆卫视
-http://183.222.15.202:4321/rtp/239.11.0.58:5140
-#EXTINF:-1 tvg-name="新疆卫视" group-title="卫视频道",新疆卫视
-http://182.135.66.163:18888/rtp/239.94.0.98:5140
 #EXTINF:-1 tvg-name="云南卫视" group-title="卫视频道",云南卫视
-http://119.39.9.8:9901/tsfile/live/0119_1.m3u8?key=txiptv&playlive=0&authid=0
+http://121.10.7.16:4000/udp/239.253.43.37:5146
+#EXTINF:-1 tvg-name="云南卫视" group-title="卫视频道",云南卫视
+http://182.135.66.163:18888/rtp/239.94.0.90:5140
+#EXTINF:-1 tvg-name="云南卫视" group-title="卫视频道",云南卫视
+http://36.136.38.87:9901/tsfile/live/0119_1.m3u8?key=txiptv&playlive=1&authid=0
+#EXTINF:-1 tvg-name="云南卫视" group-title="卫视频道",云南卫视
+http://153.0.171.163:9901/tsfile/live/0119_1.m3u8?key=txiptv&playlive=1&authid=0
+#EXTINF:-1 tvg-name="云南卫视" group-title="卫视频道",云南卫视
+http://114.241.110.52:85/tsfile/live/33/1033_1.m3u8?key=txiptv
 #EXTINF:-1 tvg-name="云南卫视" group-title="卫视频道",云南卫视
 http://flyriven.synology.me:8001/udp/226.0.2.60:8392
 #EXTINF:-1 tvg-name="云南卫视" group-title="卫视频道",云南卫视
 http://123.120.6.99:4022/rtp/239.3.1.26:8108
+#EXTINF:-1 tvg-name="云南卫视" group-title="卫视频道",云南卫视
+http://60.30.67.44:8834/rtp/225.1.1.61:5002
+#EXTINF:-1 tvg-name="云南卫视" group-title="卫视频道",云南卫视
+http://60.30.67.45:8834/rtp/225.1.1.61:5002

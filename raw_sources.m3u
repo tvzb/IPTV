@@ -4277,6 +4277,10 @@ http://171.212.170.157:8088/udp/239.94.2.184:5140
 http://171.213.142.101:8888/udp/239.94.0.78:5140
 #EXTINF:-1 tvg-name="康巴卫视" group-title="卫视频道",康巴卫视
 http://171.213.142.101:8888/udp/239.94.2.184:5140
+#EXTINF:-1 tvg-name="康巴卫视" group-title="卫视频道",康巴卫视
+http://175.0.71.196:8888/udp/239.76.253.89:9000
+#EXTINF:-1 tvg-name="康巴卫视" group-title="卫视频道",康巴卫视
+http://175.0.64.97:8888/udp/239.76.253.89:9000
 #EXTINF:-1 tvg-name="内蒙古卫视" group-title="卫视频道",内蒙古卫视
 http://z.b.bkpcp.top/m.php?id=nmws
 #EXTINF:-1 tvg-name="内蒙古卫视" group-title="卫视频道",内蒙古卫视
@@ -5792,15 +5796,11 @@ http://175.0.71.196:8888/udp/239.76.254.232:9000
 #EXTINF:-1 tvg-name="四川卫视" group-title="卫视频道",四川卫视
 http://175.0.71.196:8888/udp/239.76.253.91:9000
 #EXTINF:-1 tvg-name="四川卫视" group-title="卫视频道",四川卫视
-http://175.0.71.196:8888/udp/239.76.253.89:9000
-#EXTINF:-1 tvg-name="四川卫视" group-title="卫视频道",四川卫视
 http://175.0.71.196:8888/udp/239.76.254.234:9000
 #EXTINF:-1 tvg-name="四川卫视" group-title="卫视频道",四川卫视
 http://175.0.64.97:8888/udp/239.76.254.232:9000
 #EXTINF:-1 tvg-name="四川卫视" group-title="卫视频道",四川卫视
 http://175.0.64.97:8888/udp/239.76.253.91:9000
-#EXTINF:-1 tvg-name="四川卫视" group-title="卫视频道",四川卫视
-http://175.0.64.97:8888/udp/239.76.253.89:9000
 #EXTINF:-1 tvg-name="四川卫视" group-title="卫视频道",四川卫视
 http://175.0.64.97:8888/udp/239.76.254.234:9000
 #EXTINF:-1 tvg-name="天津卫视" group-title="卫视频道",天津卫视
