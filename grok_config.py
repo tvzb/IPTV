@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 配置模块：目标频道、标准化清洗、种子裂变、广播剔除、运行参数
-真实画面优先优化版
+真实画面优先 + 高覆盖率优化版
+- 频道名称与顺序严格对齐 config.py（前7卫视置顶 + 拼音升序）
+- 扩大搜索页数、候选池与裂变深度，显著提升可用源数量
 """
 import os
 import re
@@ -30,7 +32,7 @@ DEFAULT_CCTV_CHANNELS = [
     "CCTV-17 农业农村",
 ]
 
-# 默认省级卫视频道：前7个置顶优先，后25个按拼音字母升序
+# 默认省级卫视频道：前7个置顶优先，后25个按首字汉语拼音严格字母升序
 DEFAULT_SATELLITE_CHANNELS = [
     # 7个置顶优先卫视
     "江西卫视",
@@ -41,33 +43,33 @@ DEFAULT_SATELLITE_CHANNELS = [
     "湖南卫视",
     "辽宁卫视",
     # 其余省级卫视（按首字汉语拼音严格字母升序）
-    "安徽卫视",
-    "兵团卫视",
-    "重庆卫视",
-    "东南卫视",
-    "甘肃卫视",
-    "广东卫视",
-    "广西卫视",
-    "贵州卫视",
-    "海南卫视",
-    "河北卫视",
-    "河南卫视",
-    "黑龙江卫视",
-    "湖北卫视",
-    "吉林卫视",
-    "康巴卫视",
-    "内蒙古卫视",
-    "宁夏卫视",
-    "青海卫视",
-    "山东卫视",
-    "山西卫视",
-    "陕西卫视",
-    "深圳卫视",
-    "四川卫视",
-    "天津卫视",
-    "西藏卫视",
-    "新疆卫视",
-    "云南卫视",
+    "安徽卫视",   # Anhui
+    "兵团卫视",   # Bingtuan
+    "重庆卫视",   # Chongqing
+    "东南卫视",   # Dongnan (Fujian)
+    "甘肃卫视",   # Gansu
+    "广东卫视",   # Guangdong
+    "广西卫视",   # Guangxi
+    "贵州卫视",   # Guizhou
+    "海南卫视",   # Hainan
+    "河北卫视",   # Hebei
+    "河南卫视",   # Henan
+    "黑龙江卫视", # Heilongjiang
+    "湖北卫视",   # Hubei
+    "吉林卫视",   # Jilin
+    "康巴卫视",   # Kangba
+    "内蒙古卫视", # Neimenggu
+    "宁夏卫视",   # Ningxia
+    "青海卫视",   # Qinghai
+    "山东卫视",   # Shandong
+    "山西卫视",   # Shanxi
+    "陕西卫视",   # Shaanxi
+    "深圳卫视",   # Shenzhen
+    "四川卫视",   # Sichuan
+    "天津卫视",   # Tianjin
+    "西藏卫视",   # Xizang
+    "新疆卫视",   # Xinjiang
+    "云南卫视",   # Yunnan
 ]
 
 ALL_DEFAULT_TARGETS = DEFAULT_CCTV_CHANNELS + DEFAULT_SATELLITE_CHANNELS
@@ -147,7 +149,7 @@ CHANNEL_SLUGS: Dict[str, List[str]] = {
 
 
 def clean_stream_url(raw_url: str) -> str:
-    """彻底清除 '$' 及其后面的任何文字修饰"""
+    """彻底清除 '$' 及其后面的任何文字修饰，并去除首尾空白"""
     if not raw_url:
         return ""
     return raw_url.split("$")[0].strip()
@@ -196,7 +198,9 @@ def normalize_channel_name(raw_name: str) -> str:
         if keyword in clean_name and ("卫视" in clean_name or sat in clean_name or "台" in clean_name):
             return sat
         if sat == "东方卫视" and ("上海卫视" in clean_name or "东方台" in clean_name):
-            return "东方卫视"
+            return "东方卫视"        
+        if sat == "东南卫视" and ("福建卫视" in clean_name or "福建台" in clean_name):
+            return "东南卫视"
         if sat == "兵团卫视" and "新疆兵团" in clean_name:
             return "兵团卫视"
 
@@ -223,7 +227,7 @@ def extract_ip_port(url: str) -> Optional[str]:
 def extrapolate_channels_from_seed(seed_url: str) -> List[Tuple[str, str]]:
     """
     智能种子源裂变推导引擎：
-    同时支持【数字序号规律】与【字母标识规律】两类裂变推导！
+    同时支持【数字序号规律】与【字母标识规律】两类裂变推导。
     """
     results: List[Tuple[str, str]] = []
     clean_seed = clean_stream_url(seed_url)
@@ -301,24 +305,30 @@ RAW_SOURCES_M3U = "raw_sources.m3u"
 OUTPUT_LIVE_TXT = "live.txt"
 OUTPUT_LIVE_M3U = "live.m3u"
 
-# ==================== 真实画面优先测速参数 ====================
+# ==================== 真实画面优先 + 高覆盖率测速参数 ====================
 # 默认测速门槛（KB/s）。海外 Actions 建议 80~150，国内盒子建议 180~300
 # 可通过环境变量或命令行覆盖
-MIN_SPEED_KBS = float(os.environ.get("MIN_SPEED_KBS", 120.0))
+MIN_SPEED_KBS = float(os.environ.get("MIN_SPEED_KBS", 100.0))
 
 # 最低有效视频画面高度（像素）。低于此值视为无真实可用画面
 MIN_VIDEO_HEIGHT = int(os.environ.get("MIN_VIDEO_HEIGHT", 360))
 
-# 持续速度稳定性要求（预留，当前主要用于未来扩展）
+# 持续速度稳定性要求（预留）
 SUSTAINED_SPEED_RATIO = float(os.environ.get("SUSTAINED_SPEED_RATIO", 0.6))
 
 TVBOX_USER_AGENT = "okhttp/3.12.1"
-REQUEST_TIMEOUT = 6.0
+REQUEST_TIMEOUT = 7.0
 
 # 持续下载探针时间与体积（更接近真实播放缓冲）
-CHUNK_DOWNLOAD_TIMEOUT = 4.5          # 最长下载时间（秒）
-CHUNK_DOWNLOAD_MAX_BYTES = 768 * 1024 # 最大下载体积（约 0.75MB）
+CHUNK_DOWNLOAD_TIMEOUT = 5.0          # 最长下载时间（秒）
+CHUNK_DOWNLOAD_MAX_BYTES = 896 * 1024 # 最大下载体积（约 0.875MB）
 
-MAX_WORKERS = 28                      # 适当降低并发，减少对目标服务器压力
-TARGET_PER_CHANNEL_RAW = 50           # 原始候选池每频道上限
-MAX_SAME_IP_PER_CHANNEL = 2           # 同 IP 防独占
+MAX_WORKERS = 24                      # 适度并发，兼顾速度与目标服务器压力
+TARGET_PER_CHANNEL_RAW = 80           # 原始候选池每频道上限（扩大以提升最终可用源）
+MAX_SAME_IP_PER_CHANNEL = 3           # 同 IP 防独占（略放宽以增加多样性）
+
+# 搜索与裂变扩展参数
+GITHUB_SEARCH_MAX_ITEMS = 25          # 单页最大结果数
+GITHUB_SEARCH_PAGES = 2               # 每个查询搜索页数（扩大覆盖）
+MAX_REVERSE_IPS = 14                  # 反向裂变最大 IP 数
+KEY_SEED_LIMIT = 18                   # 每个关键种子频道取的源数量

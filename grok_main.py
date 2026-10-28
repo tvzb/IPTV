@@ -1,23 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-IPTV 自动化核心引擎（真实画面优先优化版 - 贴近国内 TVBox 实际观看）
+IPTV 自动化核心引擎（真实画面优先 + 高覆盖率优化版）
 
-核心目标：测速结果尽可能接近国内真实网络 + TVBox 实际播放体验。
+核心目标：
+1. 测速结果尽可能接近国内真实网络 + TVBox 实际播放体验
+2. 显著扩大候选源数量（更多搜索页、更多查询、更多裂变）
+3. 最终列表按「清晰度（分辨率高度）优先，持续速度次之」严格排序
+
 解决痛点：
-1. 很多源“能下一点数据但实际卡顿/黑屏/假活”
-2. 同 IP 独占导致整组失效
-3. 跨洋测速与国内真实速度差异大
-4. 广播源混入
-5. 只有开头快、后续断流的伪优质源
-
-优化策略（真实画面优先）：
-- 持续下载探针（更长时间/更大体积），计算平均速度，拒绝“开头快后面断”
-- HLS 连续拉取 2~3 个 TS 片段验证连续性
-- ffprobe 强制确认视频轨 + 有效分辨率（拒绝无画面/纯音频）
-- 分辨率 + 持续速度双重排序
-- 同 IP 防独占 + 无硬上限（达标全保留）
-- 严格剔除广播/电台
-- 反向裂变限流保护（防 403）
+- 源太少甚至为空
+- 很多源“能下一点数据但实际卡顿/黑屏/假活”
+- 同 IP 独占导致整组失效
+- 跨洋测速与国内真实速度差异大
+- 广播源混入
+- 只有开头快、后续断流的伪优质源
 """
 import os
 import re
@@ -56,6 +52,10 @@ from grok_config import (
     MAX_SAME_IP_PER_CHANNEL,
     MIN_VIDEO_HEIGHT,
     SUSTAINED_SPEED_RATIO,
+    GITHUB_SEARCH_MAX_ITEMS,
+    GITHUB_SEARCH_PAGES,
+    MAX_REVERSE_IPS,
+    KEY_SEED_LIMIT,
 )
 
 HEADERS = {
@@ -64,7 +64,7 @@ HEADERS = {
     "Connection": "keep-alive",
 }
 
-# 全网精选高星、每日同步、编码兼容性好的公共源矩阵
+# 全网精选高星、每日同步、编码兼容性好的公共源矩阵（扩大）
 FALLBACK_GITHUB_MATRIX = [
     "https://raw.githubusercontent.com/fanmingming/live/main/tv/m3u/ipv4.m3u",
     "https://raw.githubusercontent.com/Guovin/iptv-api/gd/output/result.txt",
@@ -81,45 +81,61 @@ FALLBACK_GITHUB_MATRIX = [
     "https://raw.githubusercontent.com/iptvjs/iptv-api/main/output/user_result.txt",
     "https://raw.githubusercontent.com/best-fan/iptv-sources/main/cn_cctv.m3u8",
     "https://raw.githubusercontent.com/best-fan/iptv-sources/main/cn_province.m3u8",
+    "https://raw.githubusercontent.com/YanG-1989/m3u/main/Gather.m3u",
+    "https://raw.githubusercontent.com/suxuang/myIPTV/main/ipv4.m3u",
+    "https://raw.githubusercontent.com/qist/tvbox/master/tv.txt",
+    "https://raw.githubusercontent.com/wwb521/live/main/tv.txt",
+    "https://raw.githubusercontent.com/Kimentanm/aptv/master/m3u/iptv.m3u",
+    "https://raw.githubusercontent.com/Meroser/IPTV/main/tv.m3u",
+    "https://raw.githubusercontent.com/kimwang1978/collect-tv-txt/main/merged_output.txt",
+    "https://raw.githubusercontent.com/pxiptv/live/main/iptv.txt",
+    "https://raw.githubusercontent.com/Ftindy/IPTV-URL/main/yylive.m3u",
 ]
 
 
 # =========================================================================
-# 模块一：动态月份计算与 GitHub 代码检索（限流保护版）
+# 模块一：动态月份计算与 GitHub 代码检索（限流保护 + 扩大页数）
 # =========================================================================
 
 _GITHUB_SEARCH_CIRCUIT_OPEN = False
 
 
-def get_dynamic_search_months() -> Tuple[str, str]:
+def get_dynamic_search_months() -> Tuple[str, str, str]:
     now = datetime.datetime.now()
     curr_month = now.strftime("%Y-%m")
     first_day = now.replace(day=1)
     prev_month_date = first_day - datetime.timedelta(days=1)
     prev_month = prev_month_date.strftime("%Y-%m")
-    return curr_month, prev_month
+    # 再往前一个月，覆盖更多历史更新源
+    first_day_prev = prev_month_date.replace(day=1)
+    prev2_month_date = first_day_prev - datetime.timedelta(days=1)
+    prev2_month = prev2_month_date.strftime("%Y-%m")
+    return curr_month, prev_month, prev2_month
 
 
 def get_github_auth_headers() -> Dict[str, str]:
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     headers = {
         "Accept": "application/vnd.github.v3+json",
-        "User-Agent": "IPTV-Harvester-Bot",
+        "User-Agent": "IPTV-Harvester-Bot/2.0",
     }
     if token:
         headers["Authorization"] = f"token {token}"
     return headers
 
 
-def search_github_code_files(query: str, max_items: int = 10, pages: int = 1) -> List[str]:
-    """搜索 GitHub Code，带熔断与退避，防止 403 爆炸。"""
+def search_github_code_files(query: str, max_items: int = None, pages: int = None) -> List[str]:
+    """搜索 GitHub Code，支持多页，带熔断与退避，防止 403 爆炸。"""
     global _GITHUB_SEARCH_CIRCUIT_OPEN
     if _GITHUB_SEARCH_CIRCUIT_OPEN:
         return []
 
+    max_items = max_items or GITHUB_SEARCH_MAX_ITEMS
+    pages = pages or GITHUB_SEARCH_PAGES
+
     headers = get_github_auth_headers()
     raw_urls: List[str] = []
-    per_page = min(max_items, 20)
+    per_page = min(max_items, 30)
 
     for page in range(1, pages + 1):
         api_url = (
@@ -127,7 +143,7 @@ def search_github_code_files(query: str, max_items: int = 10, pages: int = 1) ->
             f"q={urllib.parse.quote(query)}&per_page={per_page}&page={page}&sort=indexed&order=desc"
         )
         try:
-            resp = requests.get(api_url, headers=headers, timeout=12)
+            resp = requests.get(api_url, headers=headers, timeout=15)
             if resp.status_code == 200:
                 data = resp.json()
                 items = data.get("items", [])
@@ -135,12 +151,13 @@ def search_github_code_files(query: str, max_items: int = 10, pages: int = 1) ->
                     repo_full_name = item.get("repository", {}).get("full_name")
                     file_path = item.get("path")
                     if repo_full_name and file_path:
+                        # 优先 main，后续 fetch 时会自动 fallback master
                         raw_url = f"https://raw.githubusercontent.com/{repo_full_name}/main/{file_path}"
                         raw_urls.append(raw_url)
             elif resp.status_code in (403, 429):
-                print(f"[!] GitHub API 限流 ({resp.status_code})，等待 45 秒后重试一次…", flush=True)
-                time.sleep(45)
-                resp2 = requests.get(api_url, headers=headers, timeout=12)
+                print(f"[!] GitHub API 限流 ({resp.status_code})，等待 50 秒后重试一次…", flush=True)
+                time.sleep(50)
+                resp2 = requests.get(api_url, headers=headers, timeout=15)
                 if resp2.status_code in (403, 429):
                     print(f"[!] GitHub API 仍被限流，开启熔断，后续搜索全部跳过，改用备用源池。", flush=True)
                     _GITHUB_SEARCH_CIRCUIT_OPEN = True
@@ -156,21 +173,22 @@ def search_github_code_files(query: str, max_items: int = 10, pages: int = 1) ->
                             raw_urls.append(raw_url)
             else:
                 break
-        except Exception:
+        except Exception as e:
+            print(f"[!] 搜索异常: {str(e)[:60]}", flush=True)
             break
-        time.sleep(1.2)
+        time.sleep(1.5)
 
     return list(dict.fromkeys(raw_urls))
 
 
 def fetch_file_content(url: str) -> str:
     try:
-        r = requests.get(url, headers=HEADERS, timeout=10)
+        r = requests.get(url, headers=HEADERS, timeout=12)
         if r.status_code == 200:
             return r.text
         if r.status_code == 404 and "/main/" in url:
             master_url = url.replace("/main/", "/master/")
-            r2 = requests.get(master_url, headers=HEADERS, timeout=10)
+            r2 = requests.get(master_url, headers=HEADERS, timeout=12)
             if r2.status_code == 200:
                 return r2.text
     except Exception:
@@ -185,6 +203,7 @@ def parse_streams_from_text(content: str) -> List[Tuple[str, str]]:
 
     lines = [line.strip() for line in content.splitlines() if line.strip()]
 
+    # M3U 格式
     if any(line.startswith("#EXTM3U") for line in lines[:5]):
         current_title = ""
         for line in lines:
@@ -202,6 +221,7 @@ def parse_streams_from_text(content: str) -> List[Tuple[str, str]]:
                 current_title = ""
         return streams
 
+    # TXT / 逗号分隔格式
     for line in lines:
         if line.startswith("#") or ",#genre#" in line or "更新时间" in line:
             continue
@@ -220,7 +240,7 @@ def parse_streams_from_text(content: str) -> List[Tuple[str, str]]:
 
 def probe_stream_lightweight(url: str) -> bool:
     try:
-        r = requests.get(url, headers=HEADERS, timeout=3.5, stream=True)
+        r = requests.get(url, headers=HEADERS, timeout=4.0, stream=True)
         if r.status_code == 200:
             first_chunk = next(r.iter_content(chunk_size=512), b"")
             r.close()
@@ -238,7 +258,7 @@ def reverse_search_github_ip(ip_port: str) -> List[Tuple[str, str]]:
         return []
 
     discovered: List[Tuple[str, str]] = []
-    raw_urls = search_github_code_files(f'"{ip_port}"', max_items=6, pages=1)
+    raw_urls = search_github_code_files(f'"{ip_port}"', max_items=10, pages=1)
     for u in raw_urls:
         content = fetch_file_content(u)
         new_streams = parse_streams_from_text(content)
@@ -249,16 +269,16 @@ def reverse_search_github_ip(ip_port: str) -> List[Tuple[str, str]]:
 
 
 # =========================================================================
-# 模块二：全网多源采集与种子裂变引擎
+# 模块二：全网多源采集与种子裂变引擎（扩大搜索与裂变）
 # =========================================================================
 
 def harvest_all_sources() -> Dict[str, List[str]]:
     global _GITHUB_SEARCH_CIRCUIT_OPEN
     _GITHUB_SEARCH_CIRCUIT_OPEN = False
 
-    curr_month, prev_month = get_dynamic_search_months()
+    curr_month, prev_month, prev2_month = get_dynamic_search_months()
     print("=" * 70, flush=True)
-    print(f"🚀 [阶段一] 全网直播源采集与智能裂变 (时段: {curr_month} / {prev_month})", flush=True)
+    print(f"🚀 [阶段一] 全网直播源采集与智能裂变 (时段: {curr_month} / {prev_month} / {prev2_month})", flush=True)
     print("=" * 70, flush=True)
 
     user_struct = load_user_channel_structure()
@@ -271,28 +291,42 @@ def harvest_all_sources() -> Dict[str, List[str]]:
 
     print(f"[*] 监控目标频道总数: {len(target_channels)} 个", flush=True)
 
+    # 扩大搜索查询矩阵（覆盖更多月份、更多关键词、更多格式）
     search_queries = [
         f"更新 {curr_month} CCTV-2,http",
         f"更新 {prev_month} CCTV-2,http",
+        f"更新 {prev2_month} CCTV-2,http",
         f"更新 {curr_month} CCTV-6,http",
         f"更新 {curr_month} 卫视频道,http",
+        f"更新 {prev_month} 卫视频道,http",
         f"CCTV-1 {curr_month} m3u8",
         f"CCTV-6 {curr_month} m3u8",
+        f"CCTV-1 {prev_month} m3u8",
         f"topic:iptv {curr_month}",
+        f"topic:iptv {prev_month}",
         f"user_result.txt {curr_month}",
+        f"live.txt {curr_month}",
+        f"itvlist.txt {curr_month}",
+        f"CCTV-13 新闻 {curr_month}",
+        f"湖南卫视 {curr_month} m3u8",
+        f"东方卫视 {curr_month}",
+        f"ipv4.m3u {curr_month}",
+        f"result.txt CCTV",
+        f"extension:m3u8 CCTV-1",
+        f"extension:txt 更新时间 {curr_month}",
     ]
 
     all_file_urls: Set[str] = set(FALLBACK_GITHUB_MATRIX)
 
-    print("[*] 正在检索 GitHub Code（精简查询 + 限流保护）与高星直播源池...", flush=True)
+    print(f"[*] 正在检索 GitHub Code（每查询最多 {GITHUB_SEARCH_PAGES} 页 × {GITHUB_SEARCH_MAX_ITEMS} 条）与高星直播源池...", flush=True)
     for q in search_queries:
         if _GITHUB_SEARCH_CIRCUIT_OPEN:
             print("[!] 已触发熔断，跳过剩余搜索查询。", flush=True)
             break
-        found_urls = search_github_code_files(q, max_items=12, pages=1)
+        found_urls = search_github_code_files(q, max_items=GITHUB_SEARCH_MAX_ITEMS, pages=GITHUB_SEARCH_PAGES)
         for u in found_urls:
             all_file_urls.add(u)
-        time.sleep(1.0)
+        time.sleep(1.2)
 
     print(f"[+] 汇集候选清单文件: {len(all_file_urls)} 个，启动多线程并发提取...", flush=True)
 
@@ -319,13 +353,15 @@ def harvest_all_sources() -> Dict[str, List[str]]:
     fissioned_count = 0
     checked_ips: Set[str] = set()
 
-    key_seed_channels = ["CCTV-1 综合", "CCTV-2 财经", "CCTV-6 电影", "江西卫视", "东方卫视", "湖南卫视"]
+    key_seed_channels = [
+        "CCTV-1 综合", "CCTV-2 财经", "CCTV-5 体育", "CCTV-6 电影", "CCTV-13 新闻",
+        "江西卫视", "东方卫视", "湖南卫视", "浙江卫视", "江苏卫视", "北京卫视"
+    ]
     candidate_seeds: List[str] = []
     for kch in key_seed_channels:
         if kch in candidate_pool:
-            candidate_seeds.extend(candidate_pool[kch][:12])
+            candidate_seeds.extend(candidate_pool[kch][:KEY_SEED_LIMIT])
 
-    MAX_REVERSE_IPS = 8
     reverse_done = 0
 
     for seed_url in candidate_seeds:
@@ -354,9 +390,20 @@ def harvest_all_sources() -> Dict[str, List[str]]:
                     candidate_pool[ch].append(url)
                     fissioned_count += 1
 
-            time.sleep(1.5)
+            time.sleep(1.8)
 
     print(f"[✓] 智能裂变与反向搜索增补完成，新增优质源: {fissioned_count} 条（反向检索 IP 数: {reverse_done}）", flush=True)
+
+    # 对每个频道去重后截断到 TARGET_PER_CHANNEL_RAW
+    for ch in candidate_pool:
+        # 保持顺序去重
+        seen = set()
+        unique = []
+        for u in candidate_pool[ch]:
+            if u not in seen:
+                seen.add(u)
+                unique.append(u)
+        candidate_pool[ch] = unique[:TARGET_PER_CHANNEL_RAW]
 
     export_raw_files(candidate_pool, user_struct)
     return candidate_pool
@@ -408,7 +455,7 @@ def check_hls_stream_security(m3u8_text: str, base_url: str) -> Tuple[bool, str]
             if re.search(r'(10\.\d+|192\.168\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+|127\.0\.0\.1|localhost)', full_key_url):
                 return False, "内网私有加密密钥不可达"
             try:
-                kr = requests.get(full_key_url, headers=HEADERS, timeout=2.5)
+                kr = requests.get(full_key_url, headers=HEADERS, timeout=3.0)
                 if kr.status_code != 200 or len(kr.content) not in (16, 32):
                     return False, "加密密钥失效无法解密"
             except Exception:
@@ -479,8 +526,8 @@ def _ffprobe_video_info(raw_bytes: bytes) -> Tuple[str, int, int]:
             "-i", "pipe:0"
         ]
         proc = subprocess.run(
-            cmd, input=raw_bytes[:128 * 1024],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=2.0
+            cmd, input=raw_bytes[:160 * 1024],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=2.5
         )
         out = proc.stdout.decode("utf-8", errors="ignore").strip()
         if out:
@@ -577,7 +624,7 @@ def test_single_stream_speed(channel_name: str, stream_url: str) -> Tuple[str, s
 
         for idx, target_url in enumerate(ts_urls):
             try:
-                r_ts = requests.get(target_url, headers=HEADERS, timeout=4.0, stream=True)
+                r_ts = requests.get(target_url, headers=HEADERS, timeout=5.0, stream=True)
                 if r_ts.status_code != 200:
                     continue
 
@@ -587,7 +634,7 @@ def test_single_stream_speed(channel_name: str, stream_url: str) -> Tuple[str, s
                         break
                     seg_bytes += len(chunk)
                     bytes_received += len(chunk)
-                    if len(media_buffer) < 192 * 1024:  # 保留足够数据给 ffprobe
+                    if len(media_buffer) < 224 * 1024:  # 保留足够数据给 ffprobe
                         media_buffer.extend(chunk)
                     # 单片段或总超时控制
                     if time.time() - download_start >= CHUNK_DOWNLOAD_TIMEOUT:
@@ -615,7 +662,7 @@ def test_single_stream_speed(channel_name: str, stream_url: str) -> Tuple[str, s
         if successful_segments == 0 or bytes_received < 16 * 1024:
             return channel_name, clean_url, 0.0, False, "无有效数据/断流", 0
 
-        # 对 HLS，至少成功拿到 1 个完整可用片段；多个更好
+        # 对 HLS，至少成功拿到 1 个完整可用片段
         if len(ts_urls) > 1 and successful_segments < 1:
             return channel_name, clean_url, 0.0, False, "HLS片段不连续", 0
 
@@ -664,6 +711,7 @@ def run_speedtest(source_file: str = RAW_SOURCES_TXT, min_speed: float = MIN_SPE
     print(f"    - 最低有效画面高度: >= {MIN_VIDEO_HEIGHT}p（强制有视频轨）", flush=True)
     print(f"    - 安全规则: 拦截内网密钥/黑屏加密/广播源/断流假活", flush=True)
     print(f"    - 单频道同 IP 最多保留 {MAX_SAME_IP_PER_CHANNEL} 条", flush=True)
+    print(f"    - 最终排序: 清晰度（分辨率高度）优先 → 持续速度次之", flush=True)
     print("=" * 70, flush=True)
 
     channel_streams = parse_input_sources(source_file)
@@ -706,11 +754,11 @@ def run_speedtest(source_file: str = RAW_SOURCES_TXT, min_speed: float = MIN_SPE
             else:
                 rejected_count += 1
 
-            if tested_count % 20 == 0 or tested_count == len(tasks):
+            if tested_count % 25 == 0 or tested_count == len(tasks):
                 elapsed = max(time.time() - start_time, 0.1)
                 print(f"  [进展] 已评测 {tested_count}/{len(tasks)} 条 (有真实画面: {passed_count} 条, 拦截: {rejected_count} 条) ...", flush=True)
 
-    # 排序：分辨率（高度）优先，再按持续速度
+    # 排序：分辨率（高度）优先，再按持续速度（清晰度越高越靠前）
     for ch in qualified_results:
         qualified_results[ch].sort(key=lambda x: (x[3], x[1]), reverse=True)
     for ch in all_tested_results:
@@ -729,7 +777,7 @@ def export_final_playlists(
     1. 同服务器 IP 防独占；
     2. 取消硬上限，达标全部保留；
     3. 保底：达标不足时回退已通过真实画面检验的源；
-    4. 最终按分辨率 + 持续速度综合排序。
+    4. 最终按分辨率 + 持续速度综合排序（清晰度优先）。
     """
     txt_lines: List[str] = []
     m3u_lines: List[str] = ['#EXTM3U x-tvg-url="https://live.fanmingming.com/e.xml"']
