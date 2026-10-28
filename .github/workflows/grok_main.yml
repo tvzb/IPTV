@@ -7,7 +7,7 @@ on:
       min_speed:
         description: '最低持续速度门槛 (KB/s)。海外建议 80~150，国内真实盒子建议 180~300。默认 100'
         required: false
-        default: '150'
+        default: '100'
 
   # 2. 当修改了脚本或配置文件推送到主分支时自动触发测试
   push:
@@ -63,19 +63,36 @@ jobs:
             pip install requests urllib3
           fi
 
-      - name: 🚀 4. 执行 IPTV 真实画面优先工作流核心脚本
+      - name: 🔑 4. 检查 Token 是否注入成功（不泄露内容）
         env:
-          # 优先使用您在仓库 Secrets 中配置的个人 Token (搜索配额更高)，若未设置则自动回退使用系统默认 GITHUB_TOKEN
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -n "$GITHUB_TOKEN" ]; then
+            echo "✅ GITHUB_TOKEN / PAT_TOKEN 已注入，长度: ${#GITHUB_TOKEN}"
+            # 简单探测一次当前配额（不影响后续逻辑）
+            curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+                 -H "Accept: application/vnd.github.v3+json" \
+                 "https://api.github.com/rate_limit" | head -c 400 || true
+            echo ""
+          else
+            echo "❌ 警告：未检测到任何 Token！搜索极易被限流。"
+            echo "请确认仓库 Secrets 中存在名为 PAT_TOKEN 的 secret。"
+          fi
+
+      - name: 🚀 5. 执行 IPTV 真实画面优先工作流核心脚本
+        env:
+          # 优先使用仓库 Secrets 中的 PAT_TOKEN（搜索配额更高），否则回退到系统 GITHUB_TOKEN
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
           SPEED_LIMIT="${{ github.event.inputs.min_speed || '100' }}"
           echo "当前设定最低持续速度门槛: ${SPEED_LIMIT} KB/s"
           echo "注意：GitHub Actions 跑在海外，测速结果与国内真实盒子会有差异。"
           echo "本次优化已强制验证真实视频画面 + 持续下载，更接近 TVBox 实际观看体验。"
-          echo "搜索页数与候选池已大幅扩大，目标显著提升可用源数量。"
+          echo "搜索页数与候选池已扩大，并加强了限流退避与 Token 鉴权。"
           python grok_main.py "${SPEED_LIMIT}"
 
-      - name: 🔍 5. 校验输出文件完整性 (防空文件保护)
+      - name: 🔍 6. 校验输出文件完整性 (防空文件保护)
         id: verify_output
         run: |
           if [ ! -s "live.txt" ]; then
@@ -92,7 +109,7 @@ jobs:
             echo "should_commit=true" >> $GITHUB_OUTPUT
           fi
 
-      - name: 📤 6. 自动提交并推送最新直播源至仓库
+      - name: 📤 7. 自动提交并推送最新直播源至仓库
         if: steps.verify_output.outputs.should_commit == 'true'
         run: |
           git config --local user.name "github-actions[bot]"
