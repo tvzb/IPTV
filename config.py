@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 IPTV 配置模块：
-- 支持双模自动识别：
-  1. 网页点击运行：优先读取环境变量 CUSTOM_CHANNELS_JSON 或 channels.json；
-  2. GitHub 页面手动点击 "Run workflow"：自动采用上传的 config1.py 官方定义（CCTV-1~17 排除 5+，7个置顶卫视+25个拼音排序卫视）；
-- 核心提速与配额优化：
-  每个频道最多收集 30 条待测源，同 IP 最多保留 3 条，避免无意义死循环测速（解决 4979 条测速超时被取消问题）。
+- 支持双模自动识别 (网页端 JSON / 手动点击 Run workflow 读取 config.py)
+- 核心清洗与黑名单规则：彻底拦截两 IP 相连的 /rtp/ 与 /udp/ 组播假流、Flash、纯音频广播
+- 频道限额与测速参数调优
 """
 import json
 import os
@@ -30,13 +28,13 @@ DOMESTIC_SIM_IPS = [
     "61.139.2.69",
 ]
 
-# 测速与并发参数（关键调优：单请求 2.5 秒快速超时，提高到 40 线程并发，每个频道保留前 30 条优质候选）
+# 测速与并发参数
 REQUEST_TIMEOUT = 2.5
 CHUNK_DOWNLOAD_TIMEOUT = 2.0
 CHUNK_DOWNLOAD_MAX_BYTES = 512 * 1024  # 512KB 采样即可完整读取 TS 头与 ffprobe 视频轨
 MAX_WORKERS = 40
 MIN_SPEED_KBS = 200.0  # 默认最低有效速度阈值 (KB/s)
-MAX_CANDIDATES_PER_CHANNEL = 30  # 每个频道最多候选测速源数（防止测速总量膨胀到 5000+ 条被 GitHub 取消）
+MAX_CANDIDATES_PER_CHANNEL = 30  # 每个频道最多候选测速源数（防止测速总量失控）
 MAX_SAME_IP_PER_CHANNEL = 3
 
 DEFAULT_CCTV_CHANNELS = [
@@ -51,9 +49,9 @@ DEFAULT_SATELLITE_CHANNELS = [
     # 7个置顶优先卫视
     "江西卫视", "东方卫视", "北京卫视", "江苏卫视", "浙江卫视", "湖南卫视", "辽宁卫视",
     # 其余25个省级卫视
-    "安徽卫视", "兵团卫视", "重庆卫视", "东南卫视", "甘肃卫视", "广东卫视", "广西卫视",
+    "安徽卫视", "重庆卫视", "东南卫视", "甘肃卫视", "广东卫视", "广西卫视",
     "贵州卫视", "海南卫视", "河北卫视", "河南卫视", "黑龙江卫视", "湖北卫视", "吉林卫视",
-    "康巴卫视", "内蒙古卫视", "宁夏卫视", "青海卫视", "山东卫视", "山西卫视", "陕西卫视",
+    "内蒙古卫视", "宁夏卫视", "青海卫视", "山东卫视", "山西卫视", "陕西卫视",
     "深圳卫视", "四川卫视", "天津卫视", "西藏卫视", "新疆卫视", "云南卫视",
 ]
 
@@ -145,6 +143,7 @@ def get_domestic_headers(extra_headers: Dict[str, str] = None) -> Dict[str, str]
 
 
 def load_user_channel_structure() -> Dict[str, List[str]]:
+    """双模智能载入频道配置"""
     env_json = os.environ.get("CUSTOM_CHANNELS_JSON", "").strip()
     if env_json:
         try:
@@ -164,17 +163,17 @@ def load_user_channel_structure() -> Dict[str, List[str]]:
             print(f"[!] 解析网页端 CUSTOM_CHANNELS_JSON 异常: {e}", flush=True)
 
     try:
-        import config1
-        if hasattr(config1, "load_user_channel_structure"):
-            cfg1_struct = config1.load_user_channel_structure()
+        import config
+        if hasattr(config, "load_user_channel_structure"):
+            cfg1_struct = config.load_user_channel_structure()
             if isinstance(cfg1_struct, dict) and len(cfg1_struct) > 0:
-                print(f"[*] 【运行模式】手动点击 Run workflow：成功载入 config1.py 官方定义", flush=True)
+                print(f"[*] 【运行模式】手动点击 Run workflow：成功载入 config.py 官方定义", flush=True)
                 return cfg1_struct
-        elif hasattr(config1, "DEFAULT_CCTV_CHANNELS") and hasattr(config1, "DEFAULT_SATELLITE_CHANNELS"):
-            print(f"[*] 【运行模式】手动点击 Run workflow：采用 config1.py 央视与卫视定义", flush=True)
+        elif hasattr(config, "DEFAULT_CCTV_CHANNELS") and hasattr(config, "DEFAULT_SATELLITE_CHANNELS"):
+            print(f"[*] 【运行模式】手动点击 Run workflow：采用 config.py 央视与卫视定义", flush=True)
             return {
-                "央视频道": list(config1.DEFAULT_CCTV_CHANNELS),
-                "卫视频道": list(config1.DEFAULT_SATELLITE_CHANNELS),
+                "央视频道": list(config.DEFAULT_CCTV_CHANNELS),
+                "卫视频道": list(config.DEFAULT_SATELLITE_CHANNELS),
             }
     except ImportError:
         pass
@@ -211,6 +210,7 @@ def clean_stream_url(raw_url: str) -> str:
         url = m.group(1)
     if "$" in url:
         url = url.split("$", 1)[0].strip()
+    # 彻底拦截 /rtp/ 与 /udp/ 组播假源
     if "/rtp/" in url.lower() or "/udp/" in url.lower():
         return ""
     if is_blacklisted_url(url):
@@ -247,8 +247,6 @@ def normalize_channel_name(raw_name: str, custom_targets: Set[str] = None) -> st
             return sat
         if sat == "东方卫视" and ("上海卫视" in clean_name or "东方台" in clean_name):
             return "东方卫视"
-        if sat == "兵团卫视" and "新疆兵团" in clean_name:
-            return "兵团卫视"
 
     if custom_targets:
         name_stripped = re.sub(r'[\s\-_高清超清HD4K8K]', '', clean_name.upper())
@@ -302,6 +300,10 @@ def extrapolate_channels_from_seed(seed_url: str, seed_channel: str = "") -> Lis
     results: List[Tuple[str, str]] = []
     clean_seed = clean_stream_url(seed_url)
     if not clean_seed or is_blacklisted_url(clean_seed):
+        return results
+
+    # 严禁对 /rtp/ 或 /udp/ 组播源进行裂变
+    if "/rtp/" in clean_seed.lower() or "/udp/" in clean_seed.lower():
         return results
 
     if clean_seed.count("&") >= 4 or ".swf" in clean_seed.lower():
