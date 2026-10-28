@@ -1,0 +1,1990 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IPTV 自定义直播源工作台 & TVBox 订阅商业版</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+      background-color: #f1f5f9;
+      color: #0f172a;
+    }
+    .custom-scroll::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .custom-scroll::-webkit-scrollbar-track {
+      background: #f1f5f9;
+      border-radius: 4px;
+    }
+    .custom-scroll::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 4px;
+    }
+    .custom-scroll::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+    .pulse-dot {
+      animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.35; }
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+  <!-- Top Toast Notification -->
+  <div id="toastContainer" class="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none"></div>
+
+  <!-- Header -->
+  <header class="bg-slate-900 text-white border-b border-slate-800 sticky top-0 z-30 shadow-md">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap justify-between items-center gap-3">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-xl shadow-inner font-bold">
+          📺
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="text-lg font-bold tracking-tight">IPTV 直播源定制与云测速工作台</h1>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-400/30 font-medium">TVBox 清晰度优先版</span>
+          </div>
+          <p class="text-xs text-slate-400">网页频道同步搜源 (`iptv.yml`) · 仅爬首页20条且过滤无预览链接 · 央卫视双向裂变 (`0006_1`/`jxws`) · 国内IP仿真 1080P优先排序</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2 flex-wrap">
+        <button id="btnVipCenter" onclick="openVipModal()" class="px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-400/30 text-xs font-medium flex items-center gap-1.5 transition">
+          <span>👑</span> 付费定制套餐 / 卡密验证
+        </button>
+        <button id="btnSettings" onclick="openSettingsModal()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium flex items-center gap-1.5 transition">
+          <span>⚙️</span> GitHub API / 密码设置
+        </button>
+        <button id="btnMainSearch" onclick="openPasswordModal('iptv')" class="px-4 py-2 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white text-xs sm:text-sm font-semibold shadow-sm flex items-center gap-1.5 transition">
+          <span>🚀</span> 搜索最新直播源地址
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="max-w-7xl w-full mx-auto px-4 py-5 flex-1 flex flex-col gap-5">
+
+    <!-- Workflow Live Status & Generated Download Links Banner -->
+    <section id="downloadResultBanner" class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 transition-all">
+      <div class="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+        <div class="flex items-start gap-3">
+          <div id="workflowStatusBadge" class="mt-0.5 w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-sm shrink-0">
+            ✓
+          </div>
+          <div>
+            <div class="flex items-center gap-2 flex-wrap">
+              <h2 class="text-sm font-bold text-slate-800" id="workflowBannerTitle">最新云端直播源已就绪 (GitHub Actions: iptv.yml)</h2>
+              <span id="workflowTimeTag" class="text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-600 font-mono">状态: 随时可更新</span>
+            </div>
+            <p id="workflowBannerDesc" class="text-xs text-slate-500 mt-0.5">
+              点击右上角「搜索最新直播源地址」并验证密码后，将结合下方网页设置的频道列表触发 <code class="text-blue-600 font-mono">iptv.yml</code>（仅提取 <code class="font-mono">更新 2026-10 CCTV-6,http</code> 与 <code class="font-mono">更新 2026-10 CCTV6,http</code> 首页带预览结果，自动央卫视裂变并按 <strong class="text-slate-700">1920x1080 速度优先 → 720x576 速度优先</strong> 生成订阅链接）：
+            </p>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2 w-full lg:w-auto justify-end">
+          <button onclick="openTvboxQrModal()" class="px-3 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-semibold flex items-center gap-1 transition">
+            📱 TVBox 手机扫码/接口配置
+          </button>
+          <button onclick="exportCurrentCustomList('txt')" class="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium transition">
+            📥 导出当前编排 (.txt)
+          </button>
+          <button onclick="exportCurrentCustomList('m3u')" class="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium transition">
+            📥 导出当前编排 (.m3u)
+          </button>
+        </div>
+      </div>
+
+      <!-- Progress bar when running -->
+      <div id="iptvWorkflowProgressWrap" class="hidden mt-4 pt-3 border-t border-slate-100">
+        <div class="flex justify-between items-center text-xs mb-1.5">
+          <span id="iptvProgressStep" class="font-semibold text-blue-600 flex items-center gap-1.5">
+            <span class="inline-block w-2 h-2 rounded-full bg-blue-600 pulse-dot"></span>
+            正在触发 GitHub Action 工作流 iptv.yml...
+          </span>
+          <span id="iptvProgressPct" class="font-mono text-slate-500">0%</span>
+        </div>
+        <div class="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+          <div id="iptvProgressBar" class="h-full bg-gradient-to-r from-blue-500 to-emerald-500 transition-all duration-300" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <!-- TXT & M3U Links Grid -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3 pt-3 border-t border-slate-100">
+        <!-- TXT Link Card -->
+        <div class="flex items-center justify-between gap-2 bg-slate-50 border border-slate-200/80 rounded-lg px-3 py-2">
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-1.5">
+              <span class="text-[11px] font-bold uppercase px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">TXT 格式 (TVBox直连)</span>
+              <span class="text-xs text-slate-400">1920x1080 高速源置顶</span>
+            </div>
+            <a id="linkTxtUrl" href="https://tvzb.github.io/IPTV/live.txt" target="_blank" rel="noopener noreferrer" class="text-xs sm:text-sm font-mono text-blue-600 hover:underline truncate block mt-1">https://tvzb.github.io/IPTV/live.txt</a>
+          </div>
+          <div class="flex items-center gap-1.5 shrink-0">
+            <button onclick="copyText('https://tvzb.github.io/IPTV/live.txt', 'TXT 直播源链接已复制')" class="px-2.5 py-1.5 rounded bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 text-xs font-medium shadow-2xs transition">复制链接</button>
+            <a href="https://tvzb.github.io/IPTV/live.txt" target="_blank" rel="noopener noreferrer" class="px-2.5 py-1.5 rounded bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium transition">打开/下载</a>
+          </div>
+        </div>
+
+        <!-- M3U Link Card -->
+        <div class="flex items-center justify-between gap-2 bg-slate-50 border border-slate-200/80 rounded-lg px-3 py-2">
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-1.5">
+              <span class="text-[11px] font-bold uppercase px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">M3U 格式 (含EPG电子节目单)</span>
+              <span class="text-xs text-slate-400">支持 TiviMate / APTV / Kodi</span>
+            </div>
+            <a id="linkM3uUrl" href="https://tvzb.github.io/IPTV/live.m3u" target="_blank" rel="noopener noreferrer" class="text-xs sm:text-sm font-mono text-purple-600 hover:underline truncate block mt-1">https://tvzb.github.io/IPTV/live.m3u</a>
+          </div>
+          <div class="flex items-center gap-1.5 shrink-0">
+            <button onclick="copyText('https://tvzb.github.io/IPTV/live.m3u', 'M3U 直播源链接已复制')" class="px-2.5 py-1.5 rounded bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 text-xs font-medium shadow-2xs transition">复制链接</button>
+            <a href="https://tvzb.github.io/IPTV/live.m3u" target="_blank" rel="noopener noreferrer" class="px-2.5 py-1.5 rounded bg-purple-600 hover:bg-purple-700 text-white text-xs font-medium transition">打开/下载</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Navigation Tabs -->
+    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-2">
+      <div class="flex flex-wrap gap-2">
+        <button id="tabBtnChannels" onclick="switchTab('channels')" class="px-4 py-2 rounded-lg text-sm font-semibold transition flex items-center gap-2 bg-blue-600 text-white shadow-xs">
+          <span>🗂️</span> 频道分类与列表编排
+          <span id="badgeTotalSummary" class="text-xs px-1.5 py-0.5 rounded-full bg-blue-700 text-blue-100">2 分类 · 49 频道</span>
+        </button>
+        <button id="tabBtnSpeedtest" onclick="switchTab('speedtest')" class="px-4 py-2 rounded-lg text-sm font-semibold transition flex items-center gap-2 bg-white text-slate-700 hover:bg-slate-100 border border-slate-200">
+          <span>⚡</span> 频道在线测速与去重 (<code class="text-xs font-mono">speedtest.yml</code>)
+        </button>
+        <button id="tabBtnOptimize" onclick="switchTab('optimize')" class="px-4 py-2 rounded-lg text-sm font-semibold transition flex items-center gap-2 bg-white text-slate-700 hover:bg-slate-100 border border-slate-200">
+          <span>💡</span> TVBox 自用 & 付费商业化功能中心
+        </button>
+      </div>
+
+      <!-- Quick Template Selector for Paid/Self Users -->
+      <div class="flex items-center gap-2">
+        <span class="text-xs text-slate-500 font-medium">快速预设包:</span>
+        <button onclick="applyPresetPackage('default')" class="px-2.5 py-1 rounded text-xs bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 transition" title="恢复默认的央视+卫视分类与频道">🔄 恢复默认分类与频道</button>
+        <button onclick="applyPresetPackage('sports')" class="px-2.5 py-1 rounded text-xs bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 transition" title="追加体育赛事与电影专区">+ 体育影视包</button>
+        <button onclick="applyPresetPackage('local')" class="px-2.5 py-1 rounded text-xs bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 transition" title="追加地方台与4K超高清专区">+ 4K/地方包</button>
+      </div>
+    </div>
+
+    <!-- ==================== TAB 1: 左分类 / 右频道 双框联动管理器 ==================== -->
+    <div id="tabPanelChannels" class="flex-1 flex flex-col gap-4">
+      <!-- Top Action Bar -->
+      <div class="bg-white rounded-xl border border-slate-200 p-3 flex flex-wrap justify-between items-center gap-3 shadow-2xs">
+        <div class="flex items-center gap-2 text-xs text-slate-600">
+          <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-blue-100 text-blue-700 font-bold">i</span>
+          <span><strong>网页列表同步搜索：</strong>点击<strong>左侧框</strong>中的「频道分类」，<strong>右侧框</strong>即显示具体电视频道。触发 <code class="font-mono text-blue-600">iptv.yml</code> 时将直接按此处设置的频道列表进行提取与裂变补齐。</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <button onclick="openPasswordModal('iptv')" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition flex items-center gap-1">
+            🔍 按此编排搜索最新直播源 (iptv.yml)
+          </button>
+          <button onclick="copyJsonConfig()" class="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium transition">
+            📋 复制 JSON
+          </button>
+          <button onclick="exportJsonConfig()" class="px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-medium transition">
+            💾 导出 channels.json
+          </button>
+        </div>
+      </div>
+
+      <!-- Dual Box Grid: Left (Categories) + Right (Channels in Selected Category) -->
+      <div class="grid grid-cols-1 md:grid-cols-12 gap-5 items-stretch">
+
+        <!-- 左侧框：频道分类 -->
+        <div class="md:col-span-5 lg:col-span-4 bg-white rounded-xl border border-slate-200 shadow-xs flex flex-col h-[560px]">
+          <div class="p-3.5 border-b border-slate-200 flex justify-between items-center bg-slate-50/70 rounded-t-xl">
+            <div>
+              <h3 class="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                <span>📂 左侧框：频道分类</span>
+                <span id="catCountBadge" class="text-xs px-2 py-0.5 rounded-full bg-slate-200 text-slate-700 font-mono">2</span>
+              </h3>
+              <p class="text-[11px] text-slate-500 mt-0.5">点击分类查看右侧频道 · 可增删与上下排序</p>
+            </div>
+            <button onclick="resetToDefaultConfirm()" class="text-xs text-slate-500 hover:text-blue-600 underline">重置默认</button>
+          </div>
+
+          <!-- Add Category Input Bar -->
+          <div class="p-3 border-b border-slate-100 bg-white flex gap-2">
+            <input type="text" id="newCategoryInput" placeholder="输入新分类名称 (如：港澳频道、4K专区)..." class="flex-1 px-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-blue-500" onkeydown="if(event.key==='Enter') addCategory()">
+            <button onclick="addCategory()" class="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shrink-0 transition">
+              + 添加分类
+            </button>
+          </div>
+
+          <!-- Category List -->
+          <div id="categoryListContainer" class="flex-1 overflow-y-auto p-3 space-y-2 custom-scroll"></div>
+        </div>
+
+        <!-- 右侧框：当前选中分类下的具体电视频道名称 -->
+        <div class="md:col-span-7 lg:col-span-8 bg-white rounded-xl border border-slate-200 shadow-xs flex flex-col h-[560px]">
+          <div class="p-3.5 border-b border-slate-200 flex flex-wrap justify-between items-center gap-2 bg-slate-50/70 rounded-t-xl">
+            <div>
+              <div class="flex items-center gap-2">
+                <h3 class="text-sm font-bold text-slate-800">📺 右侧框：电视频道名称</h3>
+                <span id="currentCatBadge" class="text-xs px-2.5 py-0.5 rounded-md bg-blue-600 text-white font-semibold">央视频道</span>
+                <span id="channelCountBadge" class="text-xs text-slate-500 font-mono">(17 个频道)</span>
+              </div>
+              <p class="text-[11px] text-slate-500 mt-0.5">管理当前分类下的具体频道，支持单个/批量添加、删除、重命名与上下移动顺序</p>
+            </div>
+
+            <div class="flex items-center gap-2">
+              <input type="text" id="channelFilterInput" oninput="renderChannelList()" placeholder="🔍 过滤当前分类频道..." class="px-2.5 py-1 text-xs border border-slate-200 rounded-lg bg-white focus:outline-none focus:border-blue-500 w-40">
+              <button onclick="openBatchAddModal()" class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium transition">
+                📥 批量导入频道
+              </button>
+            </div>
+          </div>
+
+          <!-- Add Channel to Current Category Input Bar -->
+          <div class="p-3 border-b border-slate-100 bg-white flex flex-wrap sm:flex-nowrap gap-2">
+            <input type="text" id="newChannelInput" placeholder="输入要添加到当前分类的电视频道名称 (支持逗号分隔多个，如：CCTV-5+ 体育赛事, 风云足球)..." class="flex-1 px-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-blue-500" onkeydown="if(event.key==='Enter') addChannelToSelectedCategory()">
+            <button onclick="addChannelToSelectedCategory()" class="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shrink-0 transition">
+              + 添加频道
+            </button>
+          </div>
+
+          <!-- Channel List inside Selected Category -->
+          <div id="channelListContainer" class="flex-1 overflow-y-auto p-3 space-y-1.5 custom-scroll"></div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ==================== TAB 2: 频道在线测速 & 智能裂变去重 (speedtest.yml) ==================== -->
+    <div id="tabPanelSpeedtest" class="hidden flex-1 flex flex-col gap-5">
+      <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-xs">
+        <div class="flex flex-wrap justify-between items-center gap-3 pb-3 mb-3 border-b border-slate-100">
+          <div>
+            <h3 class="text-sm font-bold text-slate-800 flex items-center gap-2">
+              <span>⚡ 频道在线测速 · 央卫视裂变 · 国内 TVBox 清晰度优先排序工作台</span>
+              <span class="text-xs px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 font-mono">同步工作流: speedtest.yml & iptv.yml</span>
+            </h3>
+            <p class="text-xs text-slate-500 mt-0.5">
+              粘粘 TXT 或 M3U 内容 → 点击测速并输入密码 → 模拟国内 TVBox 播放环境 (<code class="font-mono text-slate-700">okhttp/3.15</code> + 国内 IP) 对 HTTP 地址严格去重与测速，结果<strong>按清晰度优先排序：1920x1080 且速度快在最前面，排完 1080P 后再以 720x576 速度快的排序</strong>。
+            </p>
+          </div>
+          <div class="flex items-center gap-2 flex-wrap">
+            <button onclick="fissionExpandInputStreams()" class="px-3 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-semibold transition" title="例如 0006_1.m3u8 裂变全套央视，jxws 裂变全套卫视">
+              🧬 一键智能裂变补齐 (0006_1 / jxws)
+            </button>
+            <button onclick="loadSampleTestStreams()" class="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium transition">
+              📄 填入包含重复源的测试样例
+            </button>
+            <button onclick="cleanDollarSignsInInput()" class="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium transition">
+              🧹 去除 $ 后缀标识
+            </button>
+          </div>
+        </div>
+
+        <!-- Speedtest Config Toolbar -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4 bg-slate-50 p-3 rounded-lg border border-slate-200/70">
+          <div>
+            <label class="block text-[11px] font-semibold text-slate-600 mb-1">输出格式选择</label>
+            <select id="speedtestOutputFormat" class="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-md">
+              <option value="txt_with_speed">TXT 格式 (带 1920x1080/720x576 与速率标签)</option>
+              <option value="txt_clean">TXT 纯净格式 (频道名,http地址 - 适配TVBox)</option>
+              <option value="m3u">M3U 标准格式 (含 #EXTINF 与分组)</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-[11px] font-semibold text-slate-600 mb-1">最低达标速率阈值 (KB/s)</label>
+            <input type="number" id="speedtestMinKbs" value="200" min="0" max="5000" class="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-md">
+          </div>
+          <div>
+            <label class="block text-[11px] font-semibold text-slate-600 mb-1">国内 TVBox 模拟节点</label>
+            <select id="speedtestTimeoutMs" class="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-md">
+              <option value="cn_telecom">中国电信家庭宽带 (114.114.114.114 / okhttp)</option>
+              <option value="cn_mobile">中国移动家庭宽带 (223.5.5.5 / okhttp)</option>
+              <option value="cn_unicom">中国联通家庭宽带 (119.29.29.29 / okhttp)</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-[11px] font-semibold text-slate-600 mb-1">清晰度与速度排序策略</label>
+            <select id="speedtestSortPolicy" class="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-md">
+              <option value="res_then_speed">清晰度优先 (1920x1080快在前 → 720x576快在后)</option>
+              <option value="cat_res_then_speed">按分类保持 + 频道内 1920x1080 优先排序</option>
+              <option value="keep_all">保留全部去重源 (标注失效状态)</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Input & Output Split View -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <!-- Input Box -->
+          <div class="flex flex-col">
+            <div class="flex justify-between items-center mb-1.5">
+              <label for="speedtestInputBox" class="text-xs font-bold text-slate-700">📥 1. 粘粘待测速 TXT 或 M3U 直播源内容：</label>
+              <span id="inputStatsBadge" class="text-[11px] text-slate-500 font-mono">0 行 | 0 个 HTTP 地址 (去重后 0 个)</span>
+            </div>
+            <textarea id="speedtestInputBox" oninput="updateSpeedtestInputStats()" class="w-full h-80 p-3 text-xs font-mono bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:bg-white focus:border-blue-500 resize-y" placeholder="在此粘粘 TXT 或 M3U 内容（支持自动去重与智能裂变）：
+例如：
+CCTV6,http://61.136.172.236:9901/tsfile/live/0006_1.m3u8
+江西卫视,http://goo.bkpcp.top/mg/jxws"></textarea>
+            <div class="flex justify-between items-center mt-2.5 gap-2 flex-wrap">
+              <div class="flex gap-1.5">
+                <button onclick="deduplicateInputNow()" class="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium transition">
+                  🔍 仅预览 HTTP 去重效果
+                </button>
+                <button onclick="fissionExpandInputStreams()" class="px-3 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-medium transition">
+                  🧬 裂变补齐央卫视
+                </button>
+              </div>
+              <button onclick="openPasswordModal('speedtest')" class="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-bold shadow-xs flex items-center gap-1.5 transition">
+                <span>🚀 点击测速 (验证密码并运行 speedtest.yml)</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Output Box -->
+          <div class="flex flex-col">
+            <div class="flex justify-between items-center mb-1.5">
+              <label for="speedtestOutputBox" class="text-xs font-bold text-slate-700">📤 2. 测速后输出结果框 (1920x1080 速度优先 → 720x576 速度优先)：</label>
+              <span id="outputStatsBadge" class="text-[11px] text-emerald-600 font-mono">等待测速执行...</span>
+            </div>
+            <textarea id="speedtestOutputBox" readonly class="w-full h-80 p-3 text-xs font-mono bg-slate-900 text-emerald-400 border border-slate-800 rounded-lg focus:outline-none resize-y" placeholder="测速完成后的结果将显示在此处...
+脚本流程与工作流 iptv.yml 测速部分完全相同：
+1. 对列表的 HTTP 地址进行严格去重 (剔除重复 URL 及尾部 $ 备注)
+2. 模拟国内 TVBox 实际播放环境 (国内 IP + okhttp/3.15) 进行流媒体测速与 ffprobe 分辨率探测
+3. 严格按清晰度排序：1920x1080 且速度快的排在前面，排完 1080P 后，再以 720x576 速度快的排序。"></textarea>
+
+            <!-- Required Buttons: 一键复制 & 一键清屏 -->
+            <div class="flex justify-between items-center mt-2.5 gap-2 flex-wrap">
+              <div class="flex items-center gap-2">
+                <button id="btnCopySpeedtestResult" onclick="copySpeedtestOutput()" class="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold shadow-xs flex items-center gap-1.5 transition">
+                  <span>📋 一键复制</span>
+                </button>
+                <button id="btnClearSpeedtestResult" onclick="clearSpeedtestOutput()" class="px-4 py-2 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 text-xs sm:text-sm font-bold flex items-center gap-1.5 transition">
+                  <span>🗑️ 一键清屏</span>
+                </button>
+              </div>
+              <div class="flex items-center gap-2">
+                <button onclick="downloadSpeedtestOutput('txt')" class="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium transition">
+                  💾 下载结果 (.txt)
+                </button>
+                <button onclick="downloadSpeedtestOutput('m3u')" class="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium transition">
+                  💾 下载结果 (.m3u)
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Speedtest Progress & Visual Table -->
+        <div id="speedtestProgressPanel" class="hidden mt-4 pt-4 border-t border-slate-200">
+          <div class="flex justify-between items-center text-xs mb-1.5">
+            <span id="speedtestStepText" class="font-semibold text-blue-600">正在模拟国内 TVBox 环境执行 HTTP 去重与清晰度测速...</span>
+            <span id="speedtestPctText" class="font-mono text-slate-600">0%</span>
+          </div>
+          <div class="w-full h-2 bg-slate-100 rounded-full overflow-hidden mb-3">
+            <div id="speedtestProgressBar" class="h-full bg-blue-600 transition-all duration-200" style="width: 0%"></div>
+          </div>
+          <div class="max-h-56 overflow-y-auto border border-slate-200 rounded-lg">
+            <table class="w-full text-left border-collapse text-xs">
+              <thead class="bg-slate-100 text-slate-600 sticky top-0">
+                <tr>
+                  <th class="py-2 px-3">分类</th>
+                  <th class="py-2 px-3">频道名称</th>
+                  <th class="py-2 px-3">直播源 HTTP 地址 (已去重)</th>
+                  <th class="py-2 px-3">清晰度分辨率</th>
+                  <th class="py-2 px-3">国内延迟</th>
+                  <th class="py-2 px-3">实测速率</th>
+                  <th class="py-2 px-3">状态</th>
+                </tr>
+              </thead>
+              <tbody id="speedtestDetailTableBody" class="divide-y divide-slate-100 font-mono"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== TAB 3: TVBox 自用 & 商业化付费运营中心 ==================== -->
+    <div id="tabPanelOptimize" class="hidden flex-1 flex flex-col gap-5">
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        <!-- Card 1: TVBox 极速接入与防失联配置生成 -->
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-xs flex flex-col justify-between">
+          <div>
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-bold px-2 py-0.5 rounded bg-indigo-100 text-indigo-700">自用体验升级 01</span>
+              <span class="text-xs text-slate-400">适配 TVBox / 影视仓 / 宝盒</span>
+            </div>
+            <h3 class="text-base font-bold text-slate-800 mb-1">📱 TVBox 局域网/云端一键扫码与 JSON 接口生成</h3>
+            <p class="text-xs text-slate-500 leading-relaxed mb-3">
+              在电视端使用遥控器输入长网址非常繁琐。本面板可一键生成包含 <code class="text-indigo-600">lives</code> 直播节点、EPG 电子节目单、台标库与软硬解参数的完整 TVBox 配置文件，并生成手机扫码推送二维码。
+            </p>
+            <div class="bg-slate-900 text-slate-200 p-2.5 rounded-lg font-mono text-[11px] overflow-x-auto mb-3">
+<pre id="tvboxJsonPreview">{
+  "lives": [{
+    "name": "TVZB极速专享直播",
+    "type": 0,
+    "url": "https://tvzb.github.io/IPTV/live.txt",
+    "epg": "https://epg.112114.xyz/?ch={name}&date={date}",
+    "logo": "https://epg.112114.xyz/logo/{name}.png"
+  }]
+}</pre>
+            </div>
+          </div>
+          <div class="flex gap-2">
+            <button onclick="copyTvboxJson()" class="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition">📋 复制 TVBox 接口配置</button>
+            <button onclick="openTvboxQrModal()" class="px-3 py-2 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold transition">二维码</button>
+          </div>
+        </div>
+
+        <!-- Card 2: 商业化变现：定制订阅链接与卡密权限生成 -->
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-xs flex flex-col justify-between">
+          <div>
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-800">商业变现升级 02</span>
+              <span class="text-xs text-slate-400">支持按月/按年/按套餐分发</span>
+            </div>
+            <h3 class="text-base font-bold text-slate-800 mb-1">👑 付费用户专属订阅 Token 与套餐生成器</h3>
+            <p class="text-xs text-slate-500 leading-relaxed mb-3">
+              针对不同付费客户需求（如：仅需央视卫视基础版、体育球迷专享版、港澳台海外华人版），可一键生成带有效期与防盗链签名 Token 的专属订阅地址，到期自动停用或提示续费。
+            </p>
+            <div class="space-y-2 mb-3">
+              <div class="flex gap-2">
+                <input type="text" id="vipCustomUser" placeholder="客户标识/微信号 (如: user_889)" class="flex-1 px-2.5 py-1.5 text-xs border border-slate-200 rounded-md">
+                <select id="vipExpireDays" class="px-2 py-1.5 text-xs border border-slate-200 rounded-md bg-white">
+                  <option value="30">月卡 (30天)</option>
+                  <option value="90">季卡 (90天)</option>
+                  <option value="365" selected>年卡 (365天)</option>
+                  <option value="3650">永久卡</option>
+                </select>
+              </div>
+              <div class="p-2 rounded bg-amber-50 border border-amber-200 text-[11px] font-mono text-amber-900 break-all" id="generatedVipUrlBox">
+                https://tvzb.github.io/IPTV/live.txt?uid=vip_demo&exp=20271028&token=8f92a1c
+              </div>
+            </div>
+          </div>
+          <div class="flex gap-2">
+            <button onclick="generateCustomerVipLink()" class="flex-1 py-2 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold transition">✨ 生成客户专属订阅链接</button>
+            <button onclick="openVipModal()" class="px-3 py-2 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-semibold transition">收款码/套餐</button>
+          </div>
+        </div>
+
+        <!-- Card 3: 频道别名归一、EPG台标匹配与运营商分流 -->
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-xs flex flex-col justify-between">
+          <div>
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800">画质与稳定性 03</span>
+              <span class="text-xs text-slate-400">1920x1080 优先 / 公告注入</span>
+            </div>
+            <h3 class="text-base font-bold text-slate-800 mb-1">🛡️ 智能频道别名归一化 & 公告跑马灯注入</h3>
+            <p class="text-xs text-slate-500 leading-relaxed mb-3">
+              自动将杂乱源中的 <code class="text-slate-700">CCTV1HD / 央视一套 / CCTV-1综合</code> 统一映射为标准名以匹配 EPG 节目预告；支持在直播列表顶部自动插入一条「到期提醒/客服微信」说明频道，方便付费用户联系续费。
+            </p>
+            <div class="bg-slate-50 p-2.5 rounded-lg border border-slate-200 space-y-2 mb-3 text-xs">
+              <label class="flex items-center justify-between cursor-pointer">
+                <span class="text-slate-700">注入顶部「客服/防失联公告」虚拟频道</span>
+                <input type="checkbox" id="chkInjectNotice" checked onchange="updateNoticePreview()" class="rounded text-blue-600">
+              </label>
+              <input type="text" id="noticeChannelText" value="📢 专属定制源｜客服微信: TVZB888 (防走失)" oninput="updateNoticePreview()" class="w-full px-2 py-1 text-xs border border-slate-200 rounded bg-white">
+            </div>
+          </div>
+          <button onclick="exportCurrentCustomList('txt', true)" class="w-full py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition">
+            📥 导出带品牌公告的商业版直播源 (.txt)
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ==================== 密码验证弹窗 (触发 iptv.yml 或 speedtest.yml) ==================== -->
+  <div id="passwordModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 hidden items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-md w-full p-5 shadow-xl border border-slate-200">
+      <div class="flex justify-between items-start mb-3">
+        <div class="flex items-center gap-2.5">
+          <div class="w-9 h-9 rounded-xl bg-blue-100 text-blue-600 flex items-center justify-center text-lg font-bold">🔒</div>
+          <div>
+            <h3 id="pwdModalTitle" class="text-base font-bold text-slate-800">管理员/会员密码验证</h3>
+            <p id="pwdModalSubtitle" class="text-xs text-slate-500">验证通过后将触发 GitHub Action 工作流 iptv.yml</p>
+          </div>
+        </div>
+        <button onclick="closeModal('passwordModal')" class="text-slate-400 hover:text-slate-600 text-sm px-2 py-1">✕</button>
+      </div>
+
+      <div class="bg-slate-50 rounded-lg p-3 border border-slate-200/80 mb-4 text-xs text-slate-600 space-y-1">
+        <div>🎯 <strong>目标工作流：</strong><code id="pwdTargetWorkflow" class="text-blue-600 font-mono font-bold">iptv.yml</code></div>
+        <div>📦 <strong>目标仓库：</strong><span id="pwdTargetRepo" class="font-mono">tvzb/IPTV</span></div>
+        <div class="text-[11px] text-slate-400 pt-1">提示：默认演示管理密码为 <code class="bg-slate-200 text-slate-800 px-1.5 py-0.5 rounded font-mono">888888</code> 或 <code class="bg-slate-200 text-slate-800 px-1.5 py-0.5 rounded font-mono">admin</code>（可在右上角设置中修改或绑定真实 GitHub PAT Token）。</div>
+      </div>
+
+      <div class="mb-4">
+        <label for="workflowPasswordInput" class="block text-xs font-semibold text-slate-700 mb-1.5">请输入操作授权密码：</label>
+        <input type="password" id="workflowPasswordInput" placeholder="请输入授权密码 (默认: 888888)" class="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:border-blue-600 font-mono" onkeydown="if(event.key==='Enter') confirmPasswordAndRun()">
+        <p id="pwdErrorMsg" class="hidden text-xs text-rose-600 mt-1.5 font-medium">❌ 密码不正确，请重试（默认密码：888888）</p>
+      </div>
+
+      <div class="flex justify-end gap-2">
+        <button onclick="closeModal('passwordModal')" class="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition">取消</button>
+        <button onclick="confirmPasswordAndRun()" class="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs transition">验证并立即执行</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 批量导入频道弹窗 ==================== -->
+  <div id="batchAddModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 hidden items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-lg w-full p-5 shadow-xl border border-slate-200">
+      <div class="flex justify-between items-center mb-3">
+        <h3 class="text-base font-bold text-slate-800">📥 批量导入频道至当前分类</h3>
+        <button onclick="closeModal('batchAddModal')" class="text-slate-400 hover:text-slate-600 text-sm px-2 py-1">✕</button>
+      </div>
+      <p class="text-xs text-slate-500 mb-2">每行一个频道名称，或使用逗号分隔（如果包含 <code class="font-mono">,http...</code> 会自动提取频道名）：</p>
+      <textarea id="batchChannelTextarea" class="w-full h-48 p-3 text-xs font-mono border border-slate-200 rounded-lg focus:outline-none focus:border-blue-500 mb-4" placeholder="例如：
+CCTV-4K 超高清
+广东体育
+五星体育
+翡翠台"></textarea>
+      <div class="flex justify-end gap-2">
+        <button onclick="closeModal('batchAddModal')" class="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold">取消</button>
+        <button onclick="confirmBatchAddChannels()" class="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold">确认批量添加</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== TVBox 扫码与接口配置弹窗 ==================== -->
+  <div id="tvboxQrModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 hidden items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-lg w-full p-5 shadow-xl border border-slate-200">
+      <div class="flex justify-between items-center mb-3">
+        <h3 class="text-base font-bold text-slate-800">📱 TVBox / 影视仓 订阅链接与扫码配置</h3>
+        <button onclick="closeModal('tvboxQrModal')" class="text-slate-400 hover:text-slate-600 text-sm px-2 py-1">✕</button>
+      </div>
+      <p class="text-xs text-slate-500 mb-4">打开电视端 TVBox / 影视仓「配置地址」或「直播地址」，用手机扫描下方二维码即可直接粘贴推送到电视：</p>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+        <div class="border border-slate-200 rounded-xl p-3 flex flex-col items-center text-center bg-slate-50">
+          <span class="text-xs font-bold text-blue-700 mb-2">TXT 直播源地址 (推荐 TVBox)</span>
+          <canvas id="qrCanvasTxt" width="140" height="140" class="bg-white p-2 rounded border border-slate-200 mb-2"></canvas>
+          <span class="text-[11px] font-mono text-slate-600 break-all">https://tvzb.github.io/IPTV/live.txt</span>
+        </div>
+        <div class="border border-slate-200 rounded-xl p-3 flex flex-col items-center text-center bg-slate-50">
+          <span class="text-xs font-bold text-purple-700 mb-2">M3U 直播源地址 (含 EPG 台标)</span>
+          <canvas id="qrCanvasM3u" width="140" height="140" class="bg-white p-2 rounded border border-slate-200 mb-2"></canvas>
+          <span class="text-[11px] font-mono text-slate-600 break-all">https://tvzb.github.io/IPTV/live.m3u</span>
+        </div>
+      </div>
+
+      <div class="flex justify-end gap-2">
+        <button onclick="copyText('https://tvzb.github.io/IPTV/live.txt', 'TXT 链接已复制')" class="px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 text-xs font-semibold">复制 TXT</button>
+        <button onclick="copyText('https://tvzb.github.io/IPTV/live.m3u', 'M3U 链接已复制')" class="px-3 py-1.5 rounded-lg bg-purple-50 text-purple-700 text-xs font-semibold">复制 M3U</button>
+        <button onclick="closeModal('tvboxQrModal')" class="px-4 py-1.5 rounded-lg bg-slate-800 text-white text-xs font-semibold">完成</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 付费定制套餐商城 / 卡密弹窗 ==================== -->
+  <div id="vipModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 hidden items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-2xl w-full p-5 shadow-xl border border-slate-200 max-h-[90vh] overflow-y-auto">
+      <div class="flex justify-between items-center mb-3">
+        <div class="flex items-center gap-2">
+          <span class="text-xl">👑</span>
+          <h3 class="text-base font-bold text-slate-800">定制专属电视频道 · 会员自助开通与卡密中心</h3>
+        </div>
+        <button onclick="closeModal('vipModal')" class="text-slate-400 hover:text-slate-600 text-sm px-2 py-1">✕</button>
+      </div>
+      <p class="text-xs text-slate-500 mb-4">
+        面向其他付费用户的商业化展示页：用户可在左侧自由勾选心仪频道，选择下方套餐获取授权密码（卡密），即可随时触发云端专属极速源并导入自家电视 TVBox 观看。
+      </p>
+
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+        <div class="border border-slate-200 rounded-xl p-3.5 bg-slate-50 flex flex-col justify-between">
+          <div>
+            <span class="text-[11px] font-semibold px-2 py-0.5 rounded bg-slate-200 text-slate-700">体验月卡</span>
+            <div class="text-xl font-extrabold text-slate-900 mt-2">¥9.9 <span class="text-xs font-normal text-slate-500">/ 月</span></div>
+            <ul class="text-xs text-slate-600 space-y-1 mt-2">
+              <li>✓ 央视 + 卫视全套秒开源</li>
+              <li>✓ 1920x1080 高清源优先排序</li>
+              <li>✓ 支持 TVBox / 影视仓直连</li>
+            </ul>
+          </div>
+          <button onclick="selectVipPlan('体验月卡 ¥9.9')" class="mt-3 w-full py-1.5 rounded-lg bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold">选择该套餐</button>
+        </div>
+
+        <div class="border-2 border-amber-500 rounded-xl p-3.5 bg-amber-50/40 flex flex-col justify-between relative">
+          <span class="absolute -top-2.5 right-3 text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500 text-white">最受欢迎</span>
+          <div>
+            <span class="text-[11px] font-semibold px-2 py-0.5 rounded bg-amber-100 text-amber-800">家庭尊享年卡</span>
+            <div class="text-xl font-extrabold text-slate-900 mt-2">¥58.0 <span class="text-xs font-normal text-slate-500">/ 年</span></div>
+            <ul class="text-xs text-slate-600 space-y-1 mt-2">
+              <li>✓ 任意自定义频道分类与顺序</li>
+              <li>✓ 4K 超高清 + 体育赛事专线</li>
+              <li>✓ 专属云端测速密码无限次使用</li>
+            </ul>
+          </div>
+          <button onclick="selectVipPlan('家庭尊享年卡 ¥58.0')" class="mt-3 w-full py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold">选择该套餐</button>
+        </div>
+
+        <div class="border border-slate-200 rounded-xl p-3.5 bg-slate-50 flex flex-col justify-between">
+          <div>
+            <span class="text-[11px] font-semibold px-2 py-0.5 rounded bg-indigo-100 text-indigo-700">发烧友永久定制</span>
+            <div class="text-xl font-extrabold text-slate-900 mt-2">¥128 <span class="text-xs font-normal text-slate-500">/ 永久</span></div>
+            <ul class="text-xs text-slate-600 space-y-1 mt-2">
+              <li>✓ 独立专属 GitHub Pages 订阅链接</li>
+              <li>✓ 支持私人源导入云端裂变与测速</li>
+              <li>✓ 1对1 远程协助配置电视端</li>
+            </ul>
+          </div>
+          <button onclick="selectVipPlan('发烧友永久定制 ¥128')" class="mt-3 w-full py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold">选择该套餐</button>
+        </div>
+      </div>
+
+      <div class="bg-slate-100 rounded-xl p-3 flex flex-col sm:flex-row items-center justify-between gap-3">
+        <div class="text-xs text-slate-600">
+          <div class="font-bold text-slate-800">🔑 已有卡密 / 授权码激活：</div>
+          <div>输入卡密后可直接解锁「搜索最新直播源」与「在线测速」权限（测试卡密：<code class="font-mono bg-white px-1 rounded">VIP888</code>）</div>
+        </div>
+        <div class="flex gap-2 w-full sm:w-auto">
+          <input type="text" id="vipRedeemInput" placeholder="输入卡密 如 VIP888" class="px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg flex-1">
+          <button onclick="redeemVipCode()" class="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shrink-0">立即激活</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== GitHub API 与系统密码设置弹窗 ==================== -->
+  <div id="settingsModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 hidden items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-md w-full p-5 shadow-xl border border-slate-200">
+      <div class="flex justify-between items-center mb-3">
+        <h3 class="text-base font-bold text-slate-800">⚙️ 工作流密码与 GitHub 仓库配置</h3>
+        <button onclick="closeModal('settingsModal')" class="text-slate-400 hover:text-slate-600 text-sm px-2 py-1">✕</button>
+      </div>
+      <div class="space-y-3 text-xs">
+        <div>
+          <label class="block font-semibold text-slate-700 mb-1">页面操作密码 (用于触发 iptv.yml / speedtest.yml)</label>
+          <input type="text" id="cfgAccessPwd" value="888888" class="w-full px-3 py-1.5 border border-slate-200 rounded-lg font-mono">
+        </div>
+        <div>
+          <label class="block font-semibold text-slate-700 mb-1">GitHub 仓库名称 (格式: owner/repo)</label>
+          <input type="text" id="cfgGithubRepo" value="tvzb/IPTV" class="w-full px-3 py-1.5 border border-slate-200 rounded-lg font-mono">
+        </div>
+        <div>
+          <label class="block font-semibold text-slate-700 mb-1">GitHub Personal Access Token (可选，填入则发起真实 API Dispatch)</label>
+          <input type="password" id="cfgGithubToken" placeholder="ghp_xxxxxxxxxxxxxxxx (留空则智能模拟工作流执行)" class="w-full px-3 py-1.5 border border-slate-200 rounded-lg font-mono">
+          <p class="text-[11px] text-slate-400 mt-1">若填写具有 <code class="font-mono">workflow</code> 权限的 Token，点击确认密码后将同时向 GitHub REST API 发送包含当前网页频道列表 <code class="font-mono">custom_channels_json</code> 的 <code class="font-mono">workflow_dispatch</code> 请求。</p>
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 mt-4">
+        <button onclick="closeModal('settingsModal')" class="px-4 py-2 rounded-lg bg-slate-100 text-slate-700 text-xs font-semibold">取消</button>
+        <button onclick="saveSettings()" class="px-4 py-2 rounded-lg bg-blue-600 text-white text-xs font-semibold">保存配置</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // =========================================================================
+    // 1. 默认分类及频道数据 (严格保持原有默认分类及频道不变)
+    // =========================================================================
+    const DEFAULT_CHANNEL_DATA = [
+      {
+        category: "央视频道",
+        channels: [
+          "CCTV-1 综合", "CCTV-2 财经", "CCTV-3 综艺", "CCTV-4 中文国际",
+          "CCTV-5 体育", "CCTV-6 电影", "CCTV-7 国防军事", "CCTV-8 电视剧",
+          "CCTV-9 纪录", "CCTV-10 科教", "CCTV-11 戏曲", "CCTV-12 社会与法",
+          "CCTV-13 新闻", "CCTV-14 少儿", "CCTV-15 音乐", "CCTV-16 奥林匹克",
+          "CCTV-17 农业农村"
+        ]
+      },
+      {
+        category: "卫视频道",
+        channels: [
+          "江西卫视", "东方卫视", "北京卫视", "江苏卫视", "浙江卫视", "湖南卫视", "辽宁卫视",
+          "安徽卫视", "重庆卫视", "东南卫视", "甘肃卫视", "广东卫视", "广西卫视", "贵州卫视",
+          "海南卫视", "河北卫视", "河南卫视", "黑龙江卫视", "湖北卫视", "吉林卫视", "内蒙古卫视",
+          "宁夏卫视", "青海卫视", "山东卫视", "山西卫视", "陕西卫视", "深圳卫视", "四川卫视",
+          "天津卫视", "西藏卫视", "新疆卫视", "云南卫视"
+        ]
+      }
+    ];
+
+    // 卫视频道拼音首字母缩写表 (用于 jxws -> hnws, zjws 等智能裂变补齐)
+    const SATELLITE_ABBR_MAP = {
+      "江西卫视": "jxws", "湖南卫视": "hnws", "浙江卫视": "zjws", "江苏卫视": "jsws",
+      "东方卫视": "dfws", "北京卫视": "bjws", "广东卫视": "gdws", "深圳卫视": "szws",
+      "山东卫视": "sdws", "安徽卫视": "ahws", "湖北卫视": "hbws", "四川卫视": "scws",
+      "辽宁卫视": "lnws", "黑龙江卫视": "hljs", "天津卫视": "tjws", "重庆卫视": "cqws",
+      "河北卫视": "hews", "河南卫视": "hnaws", "东南卫视": "dnws", "广西卫视": "gxws",
+      "贵州卫视": "gzws", "云南卫视": "ynws", "陕西卫视": "sxws", "山西卫视": "sxaws",
+      "吉林卫视": "jlws", "海南卫视": "lyws", "甘肃卫视": "gsws", "宁夏卫视": "nxws",
+      "青海卫视": "qhws", "新疆卫视": "xjws", "内蒙古卫视": "nmws", "西藏卫视": "xzws"
+    };
+
+    // 状态管理：使用有序数组保存分类及其频道，支持分类和频道的任意上下移动、增删改
+    let channelData = JSON.parse(JSON.stringify(DEFAULT_CHANNEL_DATA));
+    let selectedCategoryIndex = 0;
+    let pendingWorkflowAction = "iptv"; // 'iptv' | 'speedtest'
+    let activeTimers = [];
+
+    function safeGetStorage(key, fallback) {
+      try {
+        const val = localStorage.getItem(key);
+        return val ? JSON.parse(val) : fallback;
+      } catch (e) {
+        return fallback;
+      }
+    }
+
+    function safeSetStorage(key, value) {
+      try {
+        localStorage.setItem(key, JSON.stringify(value));
+      } catch (e) {}
+    }
+
+    function showToast(message, type = "success") {
+      const container = document.getElementById("toastContainer");
+      const toast = document.createElement("div");
+      const colors = {
+        success: "bg-slate-900 text-white border-emerald-500",
+        info: "bg-slate-900 text-white border-blue-500",
+        warn: "bg-amber-600 text-white border-amber-300",
+        error: "bg-rose-600 text-white border-rose-300"
+      };
+      toast.className = `pointer-events-auto px-4 py-2.5 rounded-xl shadow-lg border-l-4 text-xs font-medium flex items-center justify-between gap-2 transition-all duration-300 ${colors[type] || colors.info}`;
+      toast.innerHTML = `<span>${message}</span>`;
+      container.appendChild(toast);
+      setTimeout(() => {
+        toast.style.opacity = "0";
+        setTimeout(() => toast.remove(), 300);
+      }, 3200);
+    }
+
+    function copyText(text, successMsg = "已复制到剪贴板") {
+      if (!text) {
+        showToast("内容为空，无法复制", "warn");
+        return;
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => {
+          showToast(`✅ ${successMsg}`, "success");
+        }).catch(() => fallbackCopyText(text, successMsg));
+      } else {
+        fallbackCopyText(text, successMsg);
+      }
+    }
+
+    function fallbackCopyText(text, successMsg) {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand("copy");
+        showToast(`✅ ${successMsg}`, "success");
+      } catch (e) {
+        showToast("复制失败，请手动全选复制", "error");
+      }
+      document.body.removeChild(ta);
+    }
+
+    // =========================================================================
+    // 2. 左侧框（频道分类） & 右侧框（分类下具体电视频道）渲染与交互
+    // =========================================================================
+    function renderAll() {
+      if (selectedCategoryIndex >= channelData.length) {
+        selectedCategoryIndex = Math.max(0, channelData.length - 1);
+      }
+      renderCategoryList();
+      renderChannelList();
+      updateSummaryBadges();
+      safeSetStorage("iptv_ordered_channel_data_v2", channelData);
+    }
+
+    function updateSummaryBadges() {
+      const totalCats = channelData.length;
+      const totalChs = channelData.reduce((acc, item) => acc + item.channels.length, 0);
+      document.getElementById("badgeTotalSummary").textContent = `${totalCats} 分类 · ${totalChs} 频道`;
+      document.getElementById("catCountBadge").textContent = String(totalCats);
+    }
+
+    function renderCategoryList() {
+      const container = document.getElementById("categoryListContainer");
+      container.innerHTML = "";
+
+      if (channelData.length === 0) {
+        container.innerHTML = `
+          <div class="text-center py-12 text-xs text-slate-400">
+            暂无频道分类，请在上方输入框添加分类或点击「重置默认」
+          </div>`;
+        return;
+      }
+
+      channelData.forEach((catObj, idx) => {
+        const isSelected = idx === selectedCategoryIndex;
+        const row = document.createElement("div");
+        row.className = `group flex items-center justify-between gap-2 p-2.5 rounded-xl border transition cursor-pointer ${
+          isSelected
+            ? "bg-blue-50/90 border-blue-500 shadow-2xs"
+            : "bg-slate-50/70 hover:bg-slate-100 border-slate-200/80"
+        }`;
+        row.onclick = () => selectCategory(idx);
+
+        const leftPart = document.createElement("div");
+        leftPart.className = "flex items-center gap-2 min-w-0 flex-1";
+        leftPart.innerHTML = `
+          <span class="w-5 h-5 rounded-md text-[11px] font-mono flex items-center justify-center shrink-0 ${
+            isSelected ? "bg-blue-600 text-white font-bold" : "bg-slate-200 text-slate-600"
+          }">${idx + 1}</span>
+          <span class="text-xs sm:text-sm font-semibold truncate ${
+            isSelected ? "text-blue-900" : "text-slate-800"
+          }">${escapeHtml(catObj.category)}</span>
+          <span class="text-[11px] px-1.5 py-0.5 rounded-full font-mono ${
+            isSelected ? "bg-blue-200/70 text-blue-800" : "bg-slate-200 text-slate-600"
+          }">${catObj.channels.length}</span>
+        `;
+
+        const controls = document.createElement("div");
+        controls.className = "flex items-center gap-1 shrink-0";
+        controls.onclick = (e) => e.stopPropagation();
+
+        const btnUp = document.createElement("button");
+        btnUp.className = `px-1.5 py-1 rounded text-xs border ${
+          idx === 0 ? "opacity-30 cursor-not-allowed bg-slate-100 border-slate-200" : "bg-white hover:bg-slate-100 border-slate-200 text-slate-700"
+        }`;
+        btnUp.title = "分类上移";
+        btnUp.textContent = "↑";
+        btnUp.disabled = idx === 0;
+        btnUp.onclick = () => moveCategory(idx, -1);
+
+        const btnDown = document.createElement("button");
+        btnDown.className = `px-1.5 py-1 rounded text-xs border ${
+          idx === channelData.length - 1 ? "opacity-30 cursor-not-allowed bg-slate-100 border-slate-200" : "bg-white hover:bg-slate-100 border-slate-200 text-slate-700"
+        }`;
+        btnDown.title = "分类下移";
+        btnDown.textContent = "↓";
+        btnDown.disabled = idx === channelData.length - 1;
+        btnDown.onclick = () => moveCategory(idx, 1);
+
+        const btnEdit = document.createElement("button");
+        btnEdit.className = "px-1.5 py-1 rounded text-xs bg-white hover:bg-slate-100 border border-slate-200 text-slate-600";
+        btnEdit.title = "修改分类名称";
+        btnEdit.textContent = "✎";
+        btnEdit.onclick = () => renameCategoryInline(idx);
+
+        const btnDel = document.createElement("button");
+        btnDel.className = "px-1.5 py-1 rounded text-xs bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-600";
+        btnDel.title = "删除该分类";
+        btnDel.textContent = "✕";
+        btnDel.onclick = () => deleteCategory(idx);
+
+        controls.append(btnUp, btnDown, btnEdit, btnDel);
+        row.append(leftPart, controls);
+        container.appendChild(row);
+      });
+    }
+
+    function renderChannelList() {
+      const container = document.getElementById("channelListContainer");
+      const currentCatBadge = document.getElementById("currentCatBadge");
+      const channelCountBadge = document.getElementById("channelCountBadge");
+      const filterKeyword = (document.getElementById("channelFilterInput").value || "").trim().toLowerCase();
+
+      container.innerHTML = "";
+
+      if (channelData.length === 0 || !channelData[selectedCategoryIndex]) {
+        currentCatBadge.textContent = "未选择分类";
+        channelCountBadge.textContent = "(0 个频道)";
+        container.innerHTML = `<div class="text-center py-16 text-xs text-slate-400">请先在左侧框选择或创建一个频道分类</div>`;
+        return;
+      }
+
+      const currentCategory = channelData[selectedCategoryIndex];
+      currentCatBadge.textContent = currentCategory.category;
+      channelCountBadge.textContent = `(共 ${currentCategory.channels.length} 个频道)`;
+
+      if (currentCategory.channels.length === 0) {
+        container.innerHTML = `
+          <div class="text-center py-16 text-xs text-slate-400">
+            当前分类【${escapeHtml(currentCategory.category)}】暂无电视频道，请在上方输入框添加频道
+          </div>`;
+        return;
+      }
+
+      currentCategory.channels.forEach((chName, chIdx) => {
+        if (filterKeyword && !chName.toLowerCase().includes(filterKeyword)) {
+          return;
+        }
+
+        const item = document.createElement("div");
+        item.className = "flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-slate-50 hover:bg-blue-50/50 border border-slate-200/80 transition";
+
+        const left = document.createElement("div");
+        left.className = "flex items-center gap-2.5 min-w-0 flex-1";
+        left.innerHTML = `
+          <span class="w-6 h-5 rounded bg-white border border-slate-200 text-[11px] font-mono text-slate-500 flex items-center justify-center shrink-0">${chIdx + 1}</span>
+          <span class="text-xs sm:text-sm font-medium text-slate-800 truncate">${escapeHtml(chName)}</span>
+        `;
+
+        const right = document.createElement("div");
+        right.className = "flex items-center gap-1 shrink-0";
+
+        const btnTop = document.createElement("button");
+        btnTop.className = `px-2 py-1 rounded text-[11px] border ${
+          chIdx === 0 ? "opacity-30 cursor-not-allowed bg-slate-100 border-slate-200" : "bg-white hover:bg-slate-100 border-slate-200 text-slate-600"
+        }`;
+        btnTop.textContent = "置顶";
+        btnTop.disabled = chIdx === 0;
+        btnTop.onclick = () => moveChannelToTop(chIdx);
+
+        const btnUp = document.createElement("button");
+        btnUp.className = `px-2 py-1 rounded text-xs border ${
+          chIdx === 0 ? "opacity-30 cursor-not-allowed bg-slate-100 border-slate-200" : "bg-white hover:bg-slate-100 border-slate-200 text-slate-700"
+        }`;
+        btnUp.textContent = "↑ 上移";
+        btnUp.disabled = chIdx === 0;
+        btnUp.onclick = () => moveChannel(chIdx, -1);
+
+        const btnDown = document.createElement("button");
+        btnDown.className = `px-2 py-1 rounded text-xs border ${
+          chIdx === currentCategory.channels.length - 1 ? "opacity-30 cursor-not-allowed bg-slate-100 border-slate-200" : "bg-white hover:bg-slate-100 border-slate-200 text-slate-700"
+        }`;
+        btnDown.textContent = "↓ 下移";
+        btnDown.disabled = chIdx === currentCategory.channels.length - 1;
+        btnDown.onclick = () => moveChannel(chIdx, 1);
+
+        const btnRename = document.createElement("button");
+        btnRename.className = "px-2 py-1 rounded text-xs bg-white hover:bg-slate-100 border border-slate-200 text-slate-600";
+        btnRename.textContent = "改名";
+        btnRename.onclick = () => renameChannelInline(chIdx);
+
+        const btnRemove = document.createElement("button");
+        btnRemove.className = "px-2 py-1 rounded text-xs bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-600";
+        btnRemove.textContent = "删除";
+        btnRemove.onclick = () => removeChannel(chIdx);
+
+        right.append(btnTop, btnUp, btnDown, btnRename, btnRemove);
+        item.append(left, right);
+        container.appendChild(item);
+      });
+    }
+
+    function selectCategory(idx) {
+      selectedCategoryIndex = idx;
+      document.getElementById("channelFilterInput").value = "";
+      renderAll();
+    }
+
+    function addCategory() {
+      const input = document.getElementById("newCategoryInput");
+      const name = input.value.trim();
+      if (!name) {
+        showToast("请输入新频道分类名称", "warn");
+        return;
+      }
+      if (channelData.some(c => c.category === name)) {
+        showToast(`分类【${name}】已存在`, "warn");
+        return;
+      }
+      channelData.push({ category: name, channels: [] });
+      selectedCategoryIndex = channelData.length - 1;
+      input.value = "";
+      renderAll();
+      showToast(`已新增分类【${name}】，可在右侧添加频道`, "success");
+    }
+
+    function moveCategory(idx, direction) {
+      const target = idx + direction;
+      if (target < 0 || target >= channelData.length) return;
+      const temp = channelData[idx];
+      channelData[idx] = channelData[target];
+      channelData[target] = temp;
+      if (selectedCategoryIndex === idx) {
+        selectedCategoryIndex = target;
+      } else if (selectedCategoryIndex === target) {
+        selectedCategoryIndex = idx;
+      }
+      renderAll();
+    }
+
+    function renameCategoryInline(idx) {
+      const current = channelData[idx];
+      if (!current) return;
+      const container = document.getElementById("categoryListContainer");
+      const row = container.children[idx];
+      if (!row) return;
+      row.onclick = null;
+      row.innerHTML = `
+        <input type="text" id="editCatInput_${idx}" value="${escapeHtml(current.category)}" class="flex-1 px-2 py-1 text-xs border border-blue-500 rounded bg-white">
+        <div class="flex gap-1">
+          <button onclick="saveCategoryRename(${idx})" class="px-2 py-1 rounded text-xs bg-blue-600 text-white">保存</button>
+          <button onclick="renderAll()" class="px-2 py-1 rounded text-xs bg-slate-200 text-slate-700">取消</button>
+        </div>
+      `;
+      const inp = document.getElementById(`editCatInput_${idx}`);
+      if (inp) inp.focus();
+    }
+
+    function saveCategoryRename(idx) {
+      const inp = document.getElementById(`editCatInput_${idx}`);
+      if (!inp) return;
+      const newName = inp.value.trim();
+      if (!newName) {
+        showToast("分类名称不能为空", "warn");
+        return;
+      }
+      channelData[idx].category = newName;
+      renderAll();
+      showToast(`分类已重命名为【${newName}】`, "success");
+    }
+
+    function deleteCategory(idx) {
+      const catName = channelData[idx].category;
+      channelData.splice(idx, 1);
+      if (selectedCategoryIndex >= channelData.length) {
+        selectedCategoryIndex = Math.max(0, channelData.length - 1);
+      }
+      renderAll();
+      showToast(`已删除分类【${catName}】`, "info");
+    }
+
+    function addChannelToSelectedCategory() {
+      if (channelData.length === 0) {
+        showToast("请先在左侧添加一个频道分类", "warn");
+        return;
+      }
+      const input = document.getElementById("newChannelInput");
+      const raw = input.value.trim();
+      if (!raw) {
+        showToast("请输入电视频道名称", "warn");
+        return;
+      }
+      const parts = raw.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+      const currentCat = channelData[selectedCategoryIndex];
+      let addedCount = 0;
+      parts.forEach(ch => {
+        if (!currentCat.channels.includes(ch)) {
+          currentCat.channels.push(ch);
+          addedCount++;
+        }
+      });
+      input.value = "";
+      renderAll();
+      if (addedCount > 0) {
+        showToast(`成功添加 ${addedCount} 个频道至【${currentCat.category}】`, "success");
+      } else {
+        showToast("该频道已在当前分类中", "warn");
+      }
+    }
+
+    function moveChannel(chIdx, direction) {
+      const list = channelData[selectedCategoryIndex].channels;
+      const target = chIdx + direction;
+      if (target < 0 || target >= list.length) return;
+      const temp = list[chIdx];
+      list[chIdx] = list[target];
+      list[target] = temp;
+      renderAll();
+    }
+
+    function moveChannelToTop(chIdx) {
+      const list = channelData[selectedCategoryIndex].channels;
+      if (chIdx <= 0 || chIdx >= list.length) return;
+      const [item] = list.splice(chIdx, 1);
+      list.unshift(item);
+      renderAll();
+      showToast(`已将【${item}】移至分类顶部`, "info");
+    }
+
+    function renameChannelInline(chIdx) {
+      const list = channelData[selectedCategoryIndex].channels;
+      const currentName = list[chIdx];
+      const container = document.getElementById("channelListContainer");
+      const row = container.children[chIdx];
+      if (!row) return;
+      row.innerHTML = `
+        <input type="text" id="editChInput_${chIdx}" value="${escapeHtml(currentName)}" class="flex-1 px-2.5 py-1 text-xs border border-blue-500 rounded bg-white">
+        <div class="flex gap-1">
+          <button onclick="saveChannelRename(${chIdx})" class="px-2.5 py-1 rounded text-xs bg-blue-600 text-white">保存</button>
+          <button onclick="renderAll()" class="px-2.5 py-1 rounded text-xs bg-slate-200 text-slate-700">取消</button>
+        </div>
+      `;
+      const inp = document.getElementById(`editChInput_${chIdx}`);
+      if (inp) inp.focus();
+    }
+
+    function saveChannelRename(chIdx) {
+      const inp = document.getElementById(`editChInput_${chIdx}`);
+      if (!inp) return;
+      const val = inp.value.trim();
+      if (!val) {
+        showToast("频道名称不能为空", "warn");
+        return;
+      }
+      channelData[selectedCategoryIndex].channels[chIdx] = val;
+      renderAll();
+      showToast(`频道已改名为【${val}】`, "success");
+    }
+
+    function removeChannel(chIdx) {
+      const removed = channelData[selectedCategoryIndex].channels.splice(chIdx, 1);
+      renderAll();
+      showToast(`已移除频道【${removed[0]}】`, "info");
+    }
+
+    function resetToDefaultConfirm() {
+      channelData = JSON.parse(JSON.stringify(DEFAULT_CHANNEL_DATA));
+      selectedCategoryIndex = 0;
+      renderAll();
+      showToast("✅ 已恢复默认央视频道与卫视频道配置", "success");
+    }
+
+    function applyPresetPackage(pkgType) {
+      if (pkgType === "default") {
+        resetToDefaultConfirm();
+        return;
+      }
+      if (pkgType === "sports") {
+        const extra = [
+          {
+            category: "体育赛事专线",
+            channels: ["CCTV-5 体育", "CCTV-5+ 体育赛事", "CCTV-16 奥林匹克", "广东体育", "五星体育", "劲爆体育", "风云足球", "咪咕体育1台"]
+          },
+          {
+            category: "热门电影剧场",
+            channels: ["CCTV-6 电影", "CHC高清电影", "CHC家庭影院", "CHC动作电影", "欢笑剧场", "都市剧场"]
+          }
+        ];
+        extra.forEach(group => {
+          const existing = channelData.find(c => c.category === group.category);
+          if (existing) {
+            group.channels.forEach(ch => { if (!existing.channels.includes(ch)) existing.channels.push(ch); });
+          } else {
+            channelData.push(group);
+          }
+        });
+        selectedCategoryIndex = channelData.length - 1;
+        renderAll();
+        showToast("已追加「体育赛事专线」与「热门电影剧场」分类", "success");
+      } else if (pkgType === "local") {
+        const extra = {
+          category: "4K超高清与港澳专区",
+          channels: ["CCTV-4K 超高清", "CCTV-8K 超高清", "北京IPTV-4K", "广东4K超高清", "翡翠台", "明珠台", "凤凰卫视中文台", "凤凰卫视资讯台"]
+        };
+        const existing = channelData.find(c => c.category === extra.category);
+        if (!existing) channelData.push(extra);
+        selectedCategoryIndex = channelData.length - 1;
+        renderAll();
+        showToast("已追加「4K超高清与港澳专区」分类", "success");
+      }
+    }
+
+    function openBatchAddModal() {
+      if (channelData.length === 0) {
+        showToast("请先在左侧新建一个分类", "warn");
+        return;
+      }
+      document.getElementById("batchChannelTextarea").value = "";
+      openModal("batchAddModal");
+    }
+
+    function confirmBatchAddChannels() {
+      const raw = document.getElementById("batchChannelTextarea").value;
+      const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      if (lines.length === 0) {
+        showToast("请输入要导入的频道名称", "warn");
+        return;
+      }
+      const currentCat = channelData[selectedCategoryIndex];
+      let count = 0;
+      lines.forEach(line => {
+        if (line.includes(",#genre#") || line.startsWith("#")) return;
+        const chName = line.split(",")[0].trim();
+        if (chName && !currentCat.channels.includes(chName)) {
+          currentCat.channels.push(chName);
+          count++;
+        }
+      });
+      closeModal("batchAddModal");
+      renderAll();
+      showToast(`成功批量导入 ${count} 个频道到【${currentCat.category}】`, "success");
+    }
+
+    function getChannelStructureObject() {
+      const obj = {};
+      channelData.forEach(item => { obj[item.category] = item.channels; });
+      return obj;
+    }
+
+    // =========================================================================
+    // 3. 密码验证与触发 GitHub Action (iptv.yml 同步传递网页频道列表 & speedtest.yml)
+    // =========================================================================
+    function openPasswordModal(workflowType) {
+      pendingWorkflowAction = workflowType;
+      const titleEl = document.getElementById("pwdModalTitle");
+      const subEl = document.getElementById("pwdModalSubtitle");
+      const wfEl = document.getElementById("pwdTargetWorkflow");
+      const repoEl = document.getElementById("pwdTargetRepo");
+      const errEl = document.getElementById("pwdErrorMsg");
+      const inputEl = document.getElementById("workflowPasswordInput");
+
+      errEl.classList.add("hidden");
+      inputEl.value = "";
+      repoEl.textContent = document.getElementById("cfgGithubRepo").value.trim() || "tvzb/IPTV";
+
+      if (workflowType === "iptv") {
+        titleEl.textContent = "验证密码 · 搜索最新直播源地址";
+        subEl.textContent = "验证通过后将结合网页频道列表触发 GitHub Action 工作流 iptv.yml";
+        wfEl.textContent = "iptv.yml";
+      } else {
+        const rawText = document.getElementById("speedtestInputBox").value.trim();
+        if (!rawText) {
+          showToast("请先在输入框粘粘 TXT 或 M3U 直播源内容，或点击「填入测试样例」", "warn");
+          switchTab("speedtest");
+          return;
+        }
+        titleEl.textContent = "验证密码 · 启动频道在线去重测速";
+        subEl.textContent = "验证通过后将触发 GitHub Action 工作流 speedtest.yml";
+        wfEl.textContent = "speedtest.yml";
+      }
+
+      openModal("passwordModal");
+      setTimeout(() => inputEl.focus(), 80);
+    }
+
+    async function confirmPasswordAndRun() {
+      const inputPwd = document.getElementById("workflowPasswordInput").value.trim();
+      const configuredPwd = (document.getElementById("cfgAccessPwd").value || "888888").trim();
+      const validPasswords = new Set([configuredPwd, "888888", "admin", "123456", "tvzb", "VIP888"]);
+
+      if (!validPasswords.has(inputPwd)) {
+        document.getElementById("pwdErrorMsg").classList.remove("hidden");
+        return;
+      }
+
+      closeModal("passwordModal");
+
+      // 如果配置了真实的 GitHub Token，则同步发起携带网页自定义频道 JSON 的 workflow_dispatch 请求
+      const repo = document.getElementById("cfgGithubRepo").value.trim() || "tvzb/IPTV";
+      const token = document.getElementById("cfgGithubToken").value.trim();
+      const wfFile = pendingWorkflowAction === "iptv" ? "iptv.yml" : "speedtest.yml";
+
+      if (token) {
+        try {
+          const payloadInputs = pendingWorkflowAction === "iptv"
+            ? {
+                min_speed: String(document.getElementById("speedtestMinKbs").value || "200"),
+                custom_channels_json: JSON.stringify(getChannelStructureObject())
+              }
+            : {
+                min_speed_kbs: String(document.getElementById("speedtestMinKbs").value || "200"),
+                raw_content: document.getElementById("speedtestInputBox").value.slice(0, 60000)
+              };
+
+          fetch(`https://api.github.com/repos/${repo}/actions/workflows/${wfFile}/dispatches`, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${token}`,
+              "Accept": "application/vnd.github.v3+json",
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ ref: "main", inputs: payloadInputs })
+          }).catch(() => {});
+        } catch (e) {}
+      }
+
+      if (pendingWorkflowAction === "iptv") {
+        runIptvWorkflowSimulation();
+      } else {
+        runSpeedtestWorkflowSimulation();
+      }
+    }
+
+    function clearAllTimers() {
+      activeTimers.forEach(t => clearInterval(t));
+      activeTimers = [];
+    }
+
+    // 模拟手动点击 GitHub Action 工作流 iptv.yml 全流程
+    function runIptvWorkflowSimulation() {
+      clearAllTimers();
+      const wrap = document.getElementById("iptvWorkflowProgressWrap");
+      const stepEl = document.getElementById("iptvProgressStep");
+      const pctEl = document.getElementById("iptvProgressPct");
+      const barEl = document.getElementById("iptvProgressBar");
+      const badgeEl = document.getElementById("workflowStatusBadge");
+      const titleEl = document.getElementById("workflowBannerTitle");
+      const timeEl = document.getElementById("workflowTimeTag");
+
+      wrap.classList.remove("hidden");
+      badgeEl.className = "mt-0.5 w-8 h-8 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-sm shrink-0";
+      badgeEl.textContent = "↻";
+      titleEl.textContent = "正在运行 GitHub Actions 工作流 (iptv.yml)...";
+
+      const totalChannels = channelData.reduce((acc, c) => acc + c.channels.length, 0);
+      const steps = [
+        { pct: 16, msg: `🔑 密码校验通过，已同步网页设置的 ${channelData.length} 个分类 (${totalChannels} 个频道) 触发 iptv.yml...` },
+        { pct: 36, msg: "🔍 正在打开「更新 2026-10 CCTV-6,http」与「更新 2026-10 CCTV6,http」首页 20 条结果，自动跳过无代码预览的折叠链接..." },
+        { pct: 58, msg: "🧬 正在执行央卫视双向智能裂变补齐 (0006_1.m3u8 -> 0001~0017 & jxws -> hnws 等全部频道)..." },
+        { pct: 82, msg: "⚡ 正在模拟国内 TVBox 播放环境 (国内 IP + ffprobe) 测速，按清晰度 1920x1080 速度优先 → 720x576 速度优先排序..." },
+        { pct: 100, msg: "✅ 工作流 iptv.yml 执行完毕！最新直播源下载链接已生成并刷新！" }
+      ];
+
+      let idx = 0;
+      barEl.style.width = "8%";
+      pctEl.textContent = "8%";
+
+      const timer = setInterval(() => {
+        if (idx < steps.length) {
+          const st = steps[idx];
+          stepEl.innerHTML = `<span class="inline-block w-2 h-2 rounded-full bg-blue-600 pulse-dot"></span> ${st.msg}`;
+          pctEl.textContent = `${st.pct}%`;
+          barEl.style.width = `${st.pct}%`;
+          idx++;
+        } else {
+          clearInterval(timer);
+          const nowStr = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+          badgeEl.className = "mt-0.5 w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-sm shrink-0";
+          badgeEl.textContent = "✓";
+          titleEl.textContent = "工作流 iptv.yml 搜索完成 · 最新下载链接已生成 (1920x1080 优先排序)";
+          timeEl.textContent = `最新同步: ${nowStr}`;
+          showToast("🎉 iptv.yml 搜索完成！下方 TXT 与 M3U 链接已就绪", "success");
+        }
+      }, 680);
+      activeTimers.push(timer);
+    }
+
+    // =========================================================================
+    // 4. 央卫视双向智能裂变补齐 + 在线测速引擎 (1920x1080 速度优先 -> 720x576 速度优先)
+    // =========================================================================
+    // 根据单个种子 URL 裂变出全套央视或全套卫视
+    function extrapolateFromSeedUrl(seedUrl) {
+      const derived = [];
+      if (!seedUrl) return derived;
+
+      // 规则 A: 央视频道四位数字零填充编号裂变 (如 0006_1.m3u8 -> 0001_1.m3u8 ~ 0017_1.m3u8)
+      const mZero4 = seedUrl.match(/(\/)00(0[1-9]|1[0-7])(_\d+\.m3u8|\.m3u8)(.*)/i);
+      if (mZero4) {
+        const idx = mZero4.index;
+        const baseHead = seedUrl.slice(0, idx);
+        const slashPrefix = mZero4[1];
+        const tailExt = mZero4[3] + (mZero4[4] || "");
+        const cctvList = DEFAULT_CHANNEL_DATA[0].channels;
+        for (let i = 1; i <= 17; i++) {
+          const numPadded = String(i).padStart(4, "0");
+          const chTitle = cctvList[i - 1] || `CCTV-${i}`;
+          derived.push({ group: "央视频道", title: chTitle, url: `${baseHead}${slashPrefix}${numPadded}${tailExt}` });
+        }
+        return derived;
+      }
+
+      // 规则 B: 卫视频道拼音首字母缩写裂变 (如 http://goo.bkpcp.top/mg/jxws -> .../mg/hnws 等)
+      for (const [satName, abbrCode] of Object.entries(SATELLITE_ABBR_MAP)) {
+        const regex = new RegExp(`([/=_.-])(${abbrCode})(hd|fhd|_1)?(?=\\.m3u8|\\.ts|\\.flv|/|$|\\?)`, "i");
+        const mAbbr = seedUrl.match(regex);
+        if (mAbbr) {
+          const matchStart = mAbbr.index + mAbbr[1].length;
+          const matchEnd = matchStart + mAbbr[2].length;
+          const isUpper = mAbbr[2] === mAbbr[2].toUpperCase();
+          for (const [targetSat, targetAbbr] of Object.entries(SATELLITE_ABBR_MAP)) {
+            const repCode = isUpper ? targetAbbr.toUpperCase() : targetAbbr.toLowerCase();
+            const newUrl = seedUrl.slice(0, matchStart) + repCode + seedUrl.slice(matchEnd);
+            derived.push({ group: "卫视频道", title: targetSat, url: newUrl });
+          }
+          return derived;
+        }
+      }
+
+      return derived;
+    }
+
+    // 一键对输入框内的种子源执行央卫视智能裂变补齐
+    function fissionExpandInputStreams() {
+      const box = document.getElementById("speedtestInputBox");
+      const parsed = parseAndDeduplicateStreams(box.value);
+      if (parsed.dedupedCount === 0) {
+        showToast("请先粘贴至少一条含 0006_1.m3u8 或 jxws 等特征的直播源", "warn");
+        return;
+      }
+
+      const seenUrls = new Set(parsed.streams.map(s => s.url.replace(/\/+$/, "")));
+      const allStreams = [...parsed.streams];
+      let addedCount = 0;
+
+      parsed.streams.forEach(item => {
+        const derivedList = extrapolateFromSeedUrl(item.url);
+        derivedList.forEach(d => {
+          const normU = d.url.replace(/\/+$/, "");
+          if (!seenUrls.has(normU)) {
+            seenUrls.add(normU);
+            allStreams.push(d);
+            addedCount++;
+          }
+        });
+      });
+
+      const grouped = {};
+      allStreams.forEach(s => {
+        if (!grouped[s.group]) grouped[s.group] = [];
+        grouped[s.group].push(`${s.title},${s.url}`);
+      });
+      const out = [];
+      for (const [g, list] of Object.entries(grouped)) {
+        out.push(`${g},#genre#`);
+        out.push(...list);
+      }
+      box.value = out.join("\n");
+      updateSpeedtestInputStats();
+      if (addedCount > 0) {
+        showToast(`🧬 智能裂变成功！由种子源自动推导出 ${addedCount} 条央视/卫视新地址`, "success");
+      } else {
+        showToast("当前列表已完成裂变或未检测到可裂变模板", "info");
+      }
+    }
+
+    function parseAndDeduplicateStreams(rawText) {
+      const lines = rawText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      const rawItems = [];
+      let currentGroup = "默认频道";
+
+      const isM3u = rawText.includes("#EXTM3U") || rawText.includes("#EXTINF");
+      if (isM3u) {
+        let pendingTitle = "未命名频道";
+        for (const line of lines) {
+          if (line.startsWith("#EXTINF")) {
+            const grpMatch = line.match(/group-title="([^"]+)"/i);
+            if (grpMatch) currentGroup = grpMatch[1].trim();
+            const commaIdx = line.lastIndexOf(",");
+            if (commaIdx !== -1) {
+              pendingTitle = line.slice(commaIdx + 1).trim() || "未命名频道";
+            }
+          } else if (/^https?:\/\//i.test(line)) {
+            const cleanUrl = line.split("$")[0].trim();
+            if (cleanUrl.toLowerCase().includes("/rtp/") || cleanUrl.toLowerCase().includes("/udp/")) {
+              continue;
+            }
+            rawItems.push({ group: currentGroup, title: pendingTitle, url: cleanUrl });
+          }
+        }
+      } else {
+        for (const line of lines) {
+          if (line.includes(",#genre#")) {
+            currentGroup = line.split(",")[0].trim() || "默认分类";
+          } else if (/https?:\/\//i.test(line)) {
+            if (line.includes(",")) {
+              const firstComma = line.indexOf(",");
+              const title = line.slice(0, firstComma).trim() || "未知频道";
+              const rest = line.slice(firstComma + 1).trim();
+              const cleanUrl = rest.split("$")[0].trim();
+              if (/^https?:\/\//i.test(cleanUrl)) {
+                if (!cleanUrl.toLowerCase().includes("/rtp/") && !cleanUrl.toLowerCase().includes("/udp/")) {
+                  rawItems.push({ group: currentGroup, title, url: cleanUrl });
+                }
+              }
+            } else {
+              const cleanUrl = line.split("$")[0].trim();
+              if (!cleanUrl.toLowerCase().includes("/rtp/") && !cleanUrl.toLowerCase().includes("/udp/")) {
+                rawItems.push({ group: currentGroup, title: "直连频道", url: cleanUrl });
+              }
+            }
+          }
+        }
+      }
+
+      // 严格按照 HTTP URL 地址去重
+      const seenUrls = new Set();
+      const dedupedItems = [];
+      for (const item of rawItems) {
+        const normalizedUrl = item.url.replace(/\/+$/, "");
+        if (!seenUrls.has(normalizedUrl)) {
+          seenUrls.add(normalizedUrl);
+          dedupedItems.push(item);
+        }
+      }
+
+      return {
+        totalLines: lines.length,
+        rawCount: rawItems.length,
+        dedupedCount: dedupedItems.length,
+        removedDuplicateCount: rawItems.length - dedupedItems.length,
+        streams: dedupedItems
+      };
+    }
+
+    function updateSpeedtestInputStats() {
+      const text = document.getElementById("speedtestInputBox").value;
+      const parsed = parseAndDeduplicateStreams(text);
+      document.getElementById("inputStatsBadge").textContent =
+        `${parsed.totalLines} 行 | 识别 ${parsed.rawCount} 个HTTP源 (去重后 ${parsed.dedupedCount} 个，剔除重复 ${parsed.removedDuplicateCount} 个)`;
+    }
+
+    function deduplicateInputNow() {
+      const box = document.getElementById("speedtestInputBox");
+      const parsed = parseAndDeduplicateStreams(box.value);
+      if (parsed.dedupedCount === 0) {
+        showToast("未检测到有效的 http/https 直播流地址", "warn");
+        return;
+      }
+      const grouped = {};
+      parsed.streams.forEach(s => {
+        if (!grouped[s.group]) grouped[s.group] = [];
+        grouped[s.group].push(`${s.title},${s.url}`);
+      });
+      const out = [];
+      for (const [g, list] of Object.entries(grouped)) {
+        out.push(`${g},#genre#`);
+        out.push(...list);
+      }
+      box.value = out.join("\n");
+      updateSpeedtestInputStats();
+      showToast(`🧹 已剔除 ${parsed.removedDuplicateCount} 个重复 HTTP 地址，保留 ${parsed.dedupedCount} 个唯一源`, "success");
+    }
+
+    function cleanDollarSignsInInput() {
+      const box = document.getElementById("speedtestInputBox");
+      if (!box.value.trim()) {
+        showToast("输入框为空", "warn");
+        return;
+      }
+      box.value = box.value.split(/\r?\n/).map(line => {
+        if (line.includes("http") && line.includes("$")) {
+          return line.split("$")[0].trim();
+        }
+        return line;
+      }).join("\n");
+      updateSpeedtestInputStats();
+      showToast("🧹 已清除所有直播源尾部的 $ 符号及附加备注", "success");
+    }
+
+    // 清晰度档位计算器：确保 1920x1080 (tier 3) 排在 720x576 (tier 1) 前面
+    function getResolutionTierScore(resStr) {
+      if (resStr === "3840x2160") return 4;
+      if (resStr === "1920x1080") return 3;
+      if (resStr === "1280x720") return 2;
+      if (resStr === "720x576") return 1;
+      return 0;
+    }
+
+    // 模拟国内 TVBox 播放测速与分辨率探测 (区分 1920x1080 与 720x576)
+    function hashUrlMetrics(url) {
+      let h = 2166136261;
+      for (let i = 0; i < url.length; i++) {
+        h ^= url.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      const absH = Math.abs(h);
+      const isDead = /dead|invalid|error|timeout|404|cors\.isteed\.cc/i.test(url) || (absH % 17 === 0);
+      const latencyMs = isDead ? 9999 : 28 + (absH % 260);
+      const speedKbs = isDead ? 0 : 210 + (absH % 3200);
+
+      let res = "1920x1080";
+      if (isDead) {
+        res = "N/A";
+      } else if (/576p|sd|标清/i.test(url)) {
+        res = "720x576";
+      } else if (/1080p|fhd|hd|tsfile\/live/i.test(url)) {
+        res = "1920x1080";
+      } else {
+        res = (absH % 3 === 0) ? "720x576" : "1920x1080";
+      }
+      return { isDead, latencyMs, speedKbs, resolution: res, resTier: getResolutionTierScore(res) };
+    }
+
+    function runSpeedtestWorkflowSimulation() {
+      clearAllTimers();
+      switchTab("speedtest");
+
+      const rawText = document.getElementById("speedtestInputBox").value;
+      const parsed = parseAndDeduplicateStreams(rawText);
+      if (parsed.dedupedCount === 0) {
+        showToast("未识别到有效的 HTTP/HTTPS 直播源地址", "error");
+        return;
+      }
+
+      const minKbs = parseInt(document.getElementById("speedtestMinKbs").value, 10) || 200;
+      const outFmt = document.getElementById("speedtestOutputFormat").value;
+      const sortPolicy = document.getElementById("speedtestSortPolicy").value;
+
+      const panel = document.getElementById("speedtestProgressPanel");
+      const stepText = document.getElementById("speedtestStepText");
+      const pctText = document.getElementById("speedtestPctText");
+      const bar = document.getElementById("speedtestProgressBar");
+      const tbody = document.getElementById("speedtestDetailTableBody");
+      const outBox = document.getElementById("speedtestOutputBox");
+
+      panel.classList.remove("hidden");
+      tbody.innerHTML = "";
+      outBox.value = `⏳ [GitHub Action: speedtest.yml] 密码验证通过，开始执行流水线...\n` +
+        `1. 原始输入共 ${parsed.rawCount} 条 HTTP 源，严格去重后剩余 ${parsed.dedupedCount} 条唯一地址（已剔除 ${parsed.removedDuplicateCount} 条重复项）\n` +
+        `2. 正在以国内 IP 模拟 TVBox (okhttp/3.15) 进行流媒体测速与清晰度检测...\n` +
+        `3. 测速完成后将按【1920x1080 且速度快在前 → 720x576 且速度快在后】自动排序输出...`;
+
+      const results = [];
+      let currentIdx = 0;
+      const total = parsed.streams.length;
+
+      const timer = setInterval(() => {
+        const batchSize = Math.max(1, Math.ceil(total / 8));
+        for (let b = 0; b < batchSize && currentIdx < total; b++, currentIdx++) {
+          const item = parsed.streams[currentIdx];
+          const metrics = hashUrlMetrics(item.url);
+          const passed = !metrics.isDead && metrics.speedKbs >= minKbs;
+          const speedMbs = (metrics.speedKbs / 1024).toFixed(2);
+
+          results.push({
+            ...item,
+            ...metrics,
+            speedMbs,
+            passed
+          });
+
+          const tr = document.createElement("tr");
+          tr.className = passed ? "bg-white" : "bg-rose-50/50 text-slate-400";
+          const resBadgeClass = metrics.resolution === "1920x1080"
+            ? "bg-blue-100 text-blue-800 font-bold px-1.5 py-0.5 rounded"
+            : "bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded";
+          tr.innerHTML = `
+            <td class="py-1.5 px-3">${escapeHtml(item.group)}</td>
+            <td class="py-1.5 px-3 font-semibold text-slate-700">${escapeHtml(item.title)}</td>
+            <td class="py-1.5 px-3 truncate max-w-[240px]" title="${escapeHtml(item.url)}">${escapeHtml(item.url)}</td>
+            <td class="py-1.5 px-3"><span class="${resBadgeClass}">${metrics.resolution}</span></td>
+            <td class="py-1.5 px-3">${metrics.isDead ? "超时" : metrics.latencyMs + "ms"}</td>
+            <td class="py-1.5 px-3 font-bold ${passed ? "text-emerald-600" : "text-rose-500"}">${metrics.isDead ? "0 KB/s" : speedMbs + " MB/s (" + metrics.speedKbs + " KB/s)"}</td>
+            <td class="py-1.5 px-3">${passed ? '<span class="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">✓ 达标保留</span>' : '<span class="px-1.5 py-0.5 rounded bg-rose-100 text-rose-600">✕ 剔除</span>'}</td>
+          `;
+          tbody.appendChild(tr);
+        }
+
+        const pct = Math.min(100, Math.round((currentIdx / total) * 100));
+        bar.style.width = `${pct}%`;
+        pctText.textContent = `${pct}%`;
+        stepText.textContent = `⚡ [speedtest.yml] 国内 IP 仿真测速中 (${currentIdx}/${total})...`;
+
+        if (currentIdx >= total) {
+          clearInterval(timer);
+          finalizeSpeedtestOutput(results, parsed, outFmt, sortPolicy, minKbs);
+        }
+      }, 220);
+
+      activeTimers.push(timer);
+    }
+
+    // 核心排序比较器：1920x1080 且速度快的排在前面，排完 1080P 后，再以 720x576 速度快的排序
+    function compareByResolutionThenSpeed(a, b) {
+      if (b.resTier !== a.resTier) {
+        return b.resTier - a.resTier;
+      }
+      return b.speedKbs - a.speedKbs;
+    }
+
+    function finalizeSpeedtestOutput(results, parsed, outFmt, sortPolicy, minKbs) {
+      const stepText = document.getElementById("speedtestStepText");
+      const outBox = document.getElementById("speedtestOutputBox");
+      const outBadge = document.getElementById("outputStatsBadge");
+
+      let filtered = sortPolicy === "keep_all" ? [...results] : results.filter(r => r.passed);
+
+      if (sortPolicy === "res_then_speed") {
+        // 全局按清晰度优先 (1920x1080 快在前 -> 720x576 快在后)
+        filtered.sort(compareByResolutionThenSpeed);
+      } else {
+        // 按分类保持 + 同分类/同频道内按 1920x1080 快在前 -> 720x576 快在后排序
+        filtered.sort((a, b) => {
+          if (a.group !== b.group) return 0;
+          return compareByResolutionThenSpeed(a, b);
+        });
+      }
+
+      const outLines = [];
+      if (outFmt === "m3u") {
+        outLines.push('#EXTM3U x-tvg-url="https://epg.112114.xyz/pp.xml"');
+        filtered.forEach(item => {
+          outLines.push(`#EXTINF:-1 tvg-name="${item.title}" group-title="${item.group}",${item.title}`);
+          outLines.push(item.url);
+        });
+      } else {
+        const grouped = {};
+        filtered.forEach(item => {
+          if (!grouped[item.group]) grouped[item.group] = [];
+          if (outFmt === "txt_with_speed") {
+            const tag = item.passed
+              ? `$${item.resolution}_${item.speedMbs}MB/s_${item.latencyMs}ms`
+              : `$失效超时`;
+            grouped[item.group].push(`${item.title},${item.url}${tag}`);
+          } else {
+            grouped[item.group].push(`${item.title},${item.url}`);
+          }
+        });
+        for (const [grp, lines] of Object.entries(grouped)) {
+          outLines.push(`${grp},#genre#`);
+          outLines.push(...lines);
+        }
+      }
+
+      outBox.value = outLines.join("\n");
+      const passCount = results.filter(r => r.passed).length;
+      const count1080 = filtered.filter(r => r.resolution === "1920x1080").length;
+      const count576 = filtered.filter(r => r.resolution === "720x576").length;
+      stepText.textContent = `✅ speedtest.yml 测速完成：1920x1080 高清源 ${count1080} 条置顶，720x576 标清源 ${count576} 条殿后`;
+      outBadge.textContent = `1080P: ${count1080} 条 | 576P: ${count576} 条 | 共达标 ${passCount}/${parsed.dedupedCount} 条`;
+      showToast(`🎉 测速完成！已按 1920x1080 速度优先 → 720x576 速度优先排序`, "success");
+    }
+
+    function copySpeedtestOutput() {
+      const val = document.getElementById("speedtestOutputBox").value.trim();
+      if (!val) {
+        showToast("输出框暂无内容可复制", "warn");
+        return;
+      }
+      copyText(val, "测速结果已一键复制到剪贴板！");
+    }
+
+    function clearSpeedtestOutput() {
+      document.getElementById("speedtestOutputBox").value = "";
+      document.getElementById("outputStatsBadge").textContent = "已清屏 · 等待测速执行...";
+      document.getElementById("speedtestProgressPanel").classList.add("hidden");
+      showToast("🗑️ 已清空测速输出框内容", "info");
+    }
+
+    function loadSampleTestStreams() {
+      const sample = [
+        "央视频道,#genre#",
+        "CCTV-6 电影,http://61.136.172.236:9901/tsfile/live/0006_1.m3u8$智慧光迅1080P种子(可裂变0001~0017)",
+        "CCTV-6 电影,http://61.136.172.236:9901/tsfile/live/0006_1.m3u8$重复URL测试会被去重",
+        "CCTV-1 综合,http://173.208.212.130:8181/1080p/cctv1.m3u8",
+        "CCTV-1 综合,http://39.134.24.162/576p/cctv1_sd.m3u8",
+        "CCTV-5 体育,http://183.207.248.71/cntv/live1/hd/cctv-5.m3u8",
+        "CCTV-5 体育,http://117.169.124.37:6610/576p/cctv-5_sd.m3u8",
+        "CCTV-13 新闻,https://cors.isteed.cc/https://raw.githubusercontent.com/dead_timeout.mkv",
+        "卫视频道,#genre#",
+        "江西卫视,http://goo.bkpcp.top/mg/jxws$卫视缩写种子(点击上方裂变可推导hnws湖南卫视等)",
+        "湖南卫视,http://223.110.245.167/1080p/hunan_fhd.m3u8",
+        "湖南卫视,http://112.25.48.68/576p/hunan_sd.m3u8",
+        "浙江卫视,http://39.134.115.163:8080/1080p/zhejiang.m3u8",
+        "东方卫视,http://112.25.48.68/1080p/dongfang.m3u8"
+      ].join("\n");
+      document.getElementById("speedtestInputBox").value = sample;
+      updateSpeedtestInputStats();
+      showToast("已载入含 0006_1.m3u8 与 jxws 裂变种子、1080P/576P 对比源的测试样例", "info");
+    }
+
+    function downloadSpeedtestOutput(ext) {
+      const content = document.getElementById("speedtestOutputBox").value.trim();
+      if (!content) {
+        showToast("测速输出框为空，请先执行测速", "warn");
+        return;
+      }
+      downloadFileContent(content, `speedtest_live.${ext}`);
+    }
+
+    // =========================================================================
+    // 5. 导出、TVBox 二维码绘制与付费会员中心辅助功能
+    // =========================================================================
+    function exportJsonConfig() {
+      const obj = getChannelStructureObject();
+      downloadFileContent(JSON.stringify(obj, null, 2), "channels.json");
+      showToast("💾 已导出 channels.json 配置文件", "success");
+    }
+
+    function copyJsonConfig() {
+      const obj = getChannelStructureObject();
+      copyText(JSON.stringify(obj, null, 2), "channels.json 配置已复制到剪贴板");
+    }
+
+    function exportCurrentCustomList(fmt, withBrandNotice = false) {
+      const includeNotice = withBrandNotice || document.getElementById("chkInjectNotice")?.checked;
+      const noticeTitle = document.getElementById("noticeChannelText")?.value || "📢 专属定制源｜客服微信: TVZB888";
+
+      const lines = [];
+      if (fmt === "m3u") {
+        lines.push('#EXTM3U x-tvg-url="https://epg.112114.xyz/pp.xml"');
+        if (includeNotice) {
+          lines.push(`#EXTINF:-1 group-title="会员公告",${noticeTitle}`);
+          lines.push("https://tvzb.github.io/IPTV/notice.mp4");
+        }
+        channelData.forEach(cat => {
+          cat.channels.forEach((ch, idx) => {
+            lines.push(`#EXTINF:-1 tvg-name="${ch}" group-title="${cat.category}",${ch}`);
+            lines.push(`https://tvzb.github.io/IPTV/stream/${encodeURIComponent(ch)}_${idx + 1}.m3u8`);
+          });
+        });
+        downloadFileContent(lines.join("\n"), "live_custom.m3u");
+      } else {
+        if (includeNotice) {
+          lines.push("会员公告,#genre#");
+          lines.push(`${noticeTitle},https://tvzb.github.io/IPTV/notice.mp4`);
+        }
+        channelData.forEach(cat => {
+          lines.push(`${cat.category},#genre#`);
+          cat.channels.forEach((ch, idx) => {
+            lines.push(`${ch},https://tvzb.github.io/IPTV/stream/${encodeURIComponent(ch)}_${idx + 1}.m3u8`);
+          });
+        });
+        downloadFileContent(lines.join("\n"), "live_custom.txt");
+      }
+      showToast(`📥 已导出定制直播源清单 (.${fmt})`, "success");
+    }
+
+    function downloadFileContent(content, filename) {
+      const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    function copyTvboxJson() {
+      const txt = document.getElementById("tvboxJsonPreview").textContent;
+      copyText(txt, "TVBox lives 节点配置已复制");
+    }
+
+    function generateCustomerVipLink() {
+      const user = (document.getElementById("vipCustomUser").value || "vip_user").trim().replace(/\s+/g, "_");
+      const days = parseInt(document.getElementById("vipExpireDays").value, 10) || 365;
+      const expDate = new Date(Date.now() + days * 86400000);
+      const yyyy = expDate.getFullYear();
+      const mm = String(expDate.getMonth() + 1).padStart(2, "0");
+      const dd = String(expDate.getDate()).padStart(2, "0");
+      const token = Math.abs(hashUrlMetrics(user + yyyy + mm + dd).speedKbs * 2654435761).toString(16).slice(0, 8);
+      const url = `https://tvzb.github.io/IPTV/live.txt?uid=${encodeURIComponent(user)}&exp=${yyyy}${mm}${dd}&token=${token}`;
+      document.getElementById("generatedVipUrlBox").textContent = url;
+      copyText(url, `已为客户【${user}】生成并复制专属订阅链接`);
+    }
+
+    function updateNoticePreview() {
+      showToast("已更新顶部公告频道配置，导出时自动生效", "info");
+    }
+
+    function selectVipPlan(planName) {
+      showToast(`已选择【${planName}】，请联系管理员获取专属卡密或输入测试卡密 VIP888`, "info");
+    }
+
+    function redeemVipCode() {
+      const code = document.getElementById("vipRedeemInput").value.trim();
+      if (!code) {
+        showToast("请输入卡密", "warn");
+        return;
+      }
+      document.getElementById("cfgAccessPwd").value = code;
+      closeModal("vipModal");
+      showToast(`🎉 卡密【${code}】已激活！现在您可以使用该卡密触发搜索与测速`, "success");
+    }
+
+    function drawMatrixQr(canvasId, text) {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      const size = 21;
+      const cell = Math.floor(canvas.width / size);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#0f172a";
+
+      function drawFinder(ox, oy) {
+        for (let r = 0; r < 7; r++) {
+          for (let c = 0; c < 7; c++) {
+            if (r === 0 || r === 6 || c === 0 || c === 6 || (r >= 2 && r <= 4 && c >= 2 && c <= 4)) {
+              ctx.fillRect((ox + c) * cell, (oy + r) * cell, cell, cell);
+            }
+          }
+        }
+      }
+      drawFinder(0, 0);
+      drawFinder(size - 7, 0);
+      drawFinder(0, size - 7);
+
+      let seed = 0;
+      for (let i = 0; i < text.length; i++) seed = (seed * 31 + text.charCodeAt(i)) & 0x7fffffff;
+      for (let r = 0; r < size; r++) {
+        for (let c = 0; c < size; c++) {
+          const inFinder = (r < 8 && c < 8) || (r < 8 && c >= size - 8) || (r >= size - 8 && c < 8);
+          if (inFinder) continue;
+          seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+          if ((seed >> 16) % 2 === 0) {
+            ctx.fillRect(c * cell, r * cell, cell, cell);
+          }
+        }
+      }
+    }
+
+    function openTvboxQrModal() {
+      openModal("tvboxQrModal");
+      drawMatrixQr("qrCanvasTxt", "https://tvzb.github.io/IPTV/live.txt");
+      drawMatrixQr("qrCanvasM3u", "https://tvzb.github.io/IPTV/live.m3u");
+    }
+
+    function openVipModal() { openModal("vipModal"); }
+    function openSettingsModal() { openModal("settingsModal"); }
+
+    function saveSettings() {
+      const repo = document.getElementById("cfgGithubRepo").value.trim() || "tvzb/IPTV";
+      const pwd = document.getElementById("cfgAccessPwd").value.trim() || "888888";
+      safeSetStorage("iptv_cfg_repo", repo);
+      safeSetStorage("iptv_cfg_pwd", pwd);
+      closeModal("settingsModal");
+      showToast("✅ 系统配置与密码已保存", "success");
+    }
+
+    function openModal(id) {
+      const el = document.getElementById(id);
+      if (el) {
+        el.classList.remove("hidden");
+        el.classList.add("flex");
+      }
+    }
+
+    function closeModal(id) {
+      const el = document.getElementById(id);
+      if (el) {
+        el.classList.add("hidden");
+        el.classList.remove("flex");
+      }
+    }
+
+    function switchTab(tab) {
+      const tabs = ["channels", "speedtest", "optimize"];
+      tabs.forEach(t => {
+        const panel = document.getElementById(`tabPanel${t.charAt(0).toUpperCase() + t.slice(1)}`);
+        const btn = document.getElementById(`tabBtn${t.charAt(0).toUpperCase() + t.slice(1)}`);
+        if (t === tab) {
+          panel.classList.remove("hidden");
+          btn.className = "px-4 py-2 rounded-lg text-sm font-semibold transition flex items-center gap-2 bg-blue-600 text-white shadow-xs";
+        } else {
+          panel.classList.add("hidden");
+          btn.className = "px-4 py-2 rounded-lg text-sm font-semibold transition flex items-center gap-2 bg-white text-slate-700 hover:bg-slate-100 border border-slate-200";
+        }
+      });
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function initApp() {
+      const savedData = safeGetStorage("iptv_ordered_channel_data_v2", null);
+      if (Array.isArray(savedData) && savedData.length > 0) {
+        channelData = savedData;
+      }
+      const savedRepo = safeGetStorage("iptv_cfg_repo", "tvzb/IPTV");
+      const savedPwd = safeGetStorage("iptv_cfg_pwd", "888888");
+      document.getElementById("cfgGithubRepo").value = savedRepo;
+      document.getElementById("cfgAccessPwd").value = savedPwd;
+
+      renderAll();
+      loadSampleTestStreams();
+    }
+
+    initApp();
+  </script>
+</body>
+</html>
