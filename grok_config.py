@@ -198,9 +198,7 @@ def normalize_channel_name(raw_name: str) -> str:
         if keyword in clean_name and ("卫视" in clean_name or sat in clean_name or "台" in clean_name):
             return sat
         if sat == "东方卫视" and ("上海卫视" in clean_name or "东方台" in clean_name):
-            return "东方卫视"        
-        if sat == "东南卫视" and ("福建卫视" in clean_name or "福建台" in clean_name):
-            return "东南卫视"
+            return "东方卫视"
         if sat == "兵团卫视" and "新疆兵团" in clean_name:
             return "兵团卫视"
 
@@ -327,8 +325,8 @@ MAX_WORKERS = 24                      # 适度并发，兼顾速度与目标服�
 TARGET_PER_CHANNEL_RAW = 80           # 原始候选池每频道上限（扩大以提升最终可用源）
 MAX_SAME_IP_PER_CHANNEL = 3           # 同 IP 防独占（略放宽以增加多样性）
 
-# 搜索与裂变扩展参数
-GITHUB_SEARCH_MAX_ITEMS = 25          # 单页最大结果数
-GITHUB_SEARCH_PAGES = 2               # 每个查询搜索页数（扩大覆盖）
-MAX_REVERSE_IPS = 14                  # 反向裂变最大 IP 数
-KEY_SEED_LIMIT = 18                   # 每个关键种子频道取的源数量
+# 搜索与裂变扩展参数（兼顾覆盖与 API 限流）
+GITHUB_SEARCH_MAX_ITEMS = 20          # 单页最大结果数（更稳）
+GITHUB_SEARCH_PAGES = 2               # 每个查询搜索页数
+MAX_REVERSE_IPS = 12                  # 反向裂变最大 IP 数
+KEY_SEED_LIMIT = 15                   # 每个关键种子频道取的源数量

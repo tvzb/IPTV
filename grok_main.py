@@ -98,6 +98,8 @@ FALLBACK_GITHUB_MATRIX = [
 # =========================================================================
 
 _GITHUB_SEARCH_CIRCUIT_OPEN = False
+_GITHUB_RATE_LIMIT_HITS = 0          # 连续限流次数
+_GITHUB_AUTH_LOGGED = False
 
 
 def get_dynamic_search_months() -> Tuple[str, str, str]:
@@ -114,19 +116,70 @@ def get_dynamic_search_months() -> Tuple[str, str, str]:
 
 
 def get_github_auth_headers() -> Dict[str, str]:
-    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    """
+    获取 GitHub API 鉴权头。
+    - 支持经典 PAT（token xxx）与 Fine-grained / Actions token（Bearer xxx）
+    - 启动时只打印一次是否成功加载 Token（不泄露内容）
+    """
+    global _GITHUB_AUTH_LOGGED
+    token = (
+        os.environ.get("GITHUB_TOKEN", "").strip()
+        or os.environ.get("PAT_TOKEN", "").strip()
+        or os.environ.get("GH_TOKEN", "").strip()
+    )
     headers = {
         "Accept": "application/vnd.github.v3+json",
-        "User-Agent": "IPTV-Harvester-Bot/2.0",
+        "User-Agent": "IPTV-Harvester-Bot/2.1",
+        "X-GitHub-Api-Version": "2022-11-28",
     }
     if token:
-        headers["Authorization"] = f"token {token}"
+        # Fine-grained / GitHub App / 新版推荐 Bearer；经典 PAT 也兼容 Bearer
+        headers["Authorization"] = f"Bearer {token}"
+        if not _GITHUB_AUTH_LOGGED:
+            print(f"[*] GitHub Token 已加载（长度 {len(token)}，使用 Bearer 鉴权）", flush=True)
+            _GITHUB_AUTH_LOGGED = True
+    else:
+        if not _GITHUB_AUTH_LOGGED:
+            print("[!] 未检测到 GITHUB_TOKEN / PAT_TOKEN，将使用未鉴权请求（极易触发限流）", flush=True)
+            _GITHUB_AUTH_LOGGED = True
     return headers
 
 
+def _respect_rate_limit(resp: requests.Response) -> int:
+    """根据响应头计算建议等待秒数，返回等待时间。"""
+    # Retry-After 优先
+    retry_after = resp.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return min(int(retry_after) + 5, 120)
+        except ValueError:
+            pass
+
+    # X-RateLimit-Remaining / Reset
+    remaining = resp.headers.get("X-RateLimit-Remaining")
+    reset_ts = resp.headers.get("X-RateLimit-Reset")
+    if remaining is not None and reset_ts:
+        try:
+            if int(remaining) <= 1:
+                wait = max(0, int(reset_ts) - int(time.time())) + 8
+                return min(wait, 180)
+        except ValueError:
+            pass
+
+    # 默认退避
+    return 45
+
+
 def search_github_code_files(query: str, max_items: int = None, pages: int = None) -> List[str]:
-    """搜索 GitHub Code，支持多页，带熔断与退避，防止 403 爆炸。"""
-    global _GITHUB_SEARCH_CIRCUIT_OPEN
+    """
+    搜索 GitHub Code，支持多页。
+    改进点：
+    1. Bearer 鉴权（兼容经典 PAT 与 Fine-grained）
+    2. 读取 RateLimit / Retry-After 头，智能等待
+    3. 连续限流才熔断，单次 403 不立刻放弃全部搜索
+    4. 请求间隔加大，降低二次限流概率
+    """
+    global _GITHUB_SEARCH_CIRCUIT_OPEN, _GITHUB_RATE_LIMIT_HITS
     if _GITHUB_SEARCH_CIRCUIT_OPEN:
         return []
 
@@ -142,28 +195,13 @@ def search_github_code_files(query: str, max_items: int = None, pages: int = Non
             f"https://api.github.com/search/code?"
             f"q={urllib.parse.quote(query)}&per_page={per_page}&page={page}&sort=indexed&order=desc"
         )
-        try:
-            resp = requests.get(api_url, headers=headers, timeout=15)
-            if resp.status_code == 200:
-                data = resp.json()
-                items = data.get("items", [])
-                for item in items:
-                    repo_full_name = item.get("repository", {}).get("full_name")
-                    file_path = item.get("path")
-                    if repo_full_name and file_path:
-                        # 优先 main，后续 fetch 时会自动 fallback master
-                        raw_url = f"https://raw.githubusercontent.com/{repo_full_name}/main/{file_path}"
-                        raw_urls.append(raw_url)
-            elif resp.status_code in (403, 429):
-                print(f"[!] GitHub API 限流 ({resp.status_code})，等待 50 秒后重试一次…", flush=True)
-                time.sleep(50)
-                resp2 = requests.get(api_url, headers=headers, timeout=15)
-                if resp2.status_code in (403, 429):
-                    print(f"[!] GitHub API 仍被限流，开启熔断，后续搜索全部跳过，改用备用源池。", flush=True)
-                    _GITHUB_SEARCH_CIRCUIT_OPEN = True
-                    break
-                else:
-                    data = resp2.json()
+        success = False
+        for attempt in range(3):  # 最多重试 2 次
+            try:
+                resp = requests.get(api_url, headers=headers, timeout=18)
+
+                if resp.status_code == 200:
+                    data = resp.json()
                     items = data.get("items", [])
                     for item in items:
                         repo_full_name = item.get("repository", {}).get("full_name")
@@ -171,12 +209,51 @@ def search_github_code_files(query: str, max_items: int = None, pages: int = Non
                         if repo_full_name and file_path:
                             raw_url = f"https://raw.githubusercontent.com/{repo_full_name}/main/{file_path}"
                             raw_urls.append(raw_url)
-            else:
-                break
-        except Exception as e:
-            print(f"[!] 搜索异常: {str(e)[:60]}", flush=True)
+                    _GITHUB_RATE_LIMIT_HITS = 0  # 成功则重置计数
+                    success = True
+                    # 打印剩余配额方便排查
+                    remaining = resp.headers.get("X-RateLimit-Remaining", "?")
+                    print(f"    [搜索成功] page={page} items={len(items)}  剩余配额≈{remaining}", flush=True)
+                    break
+
+                elif resp.status_code in (403, 429):
+                    _GITHUB_RATE_LIMIT_HITS += 1
+                    wait_sec = _respect_rate_limit(resp)
+                    msg = resp.headers.get("X-RateLimit-Remaining", "unknown")
+                    print(
+                        f"[!] GitHub API 限流 ({resp.status_code})，"
+                        f"剩余配额={msg}，等待 {wait_sec}s 后重试 "
+                        f"(连续限流 {_GITHUB_RATE_LIMIT_HITS} 次)…",
+                        flush=True,
+                    )
+                    # 连续 4 次仍限流才真正熔断，避免偶发 403 直接放弃全部搜索
+                    if _GITHUB_RATE_LIMIT_HITS >= 4:
+                        print("[!] 连续多次限流，开启熔断，后续搜索跳过，改用备用源池。", flush=True)
+                        _GITHUB_SEARCH_CIRCUIT_OPEN = True
+                        return list(dict.fromkeys(raw_urls))
+                    time.sleep(wait_sec)
+                    continue  # 重试
+
+                elif resp.status_code == 401:
+                    print("[!] GitHub Token 无效或权限不足 (401 Unauthorized)，请检查 PAT_TOKEN 的 scopes。", flush=True)
+                    print("    经典 PAT 至少需要 public_repo；Fine-grained 需要 Contents: Read + Metadata: Read。", flush=True)
+                    _GITHUB_SEARCH_CIRCUIT_OPEN = True
+                    return list(dict.fromkeys(raw_urls))
+
+                else:
+                    print(f"[!] GitHub API 返回 {resp.status_code}，跳过本页。", flush=True)
+                    break
+
+            except Exception as e:
+                print(f"[!] 搜索异常: {str(e)[:80]}", flush=True)
+                time.sleep(3)
+                continue
+
+        if not success:
             break
-        time.sleep(1.5)
+
+        # 正常请求间隔（Search API 二级限流很严，间隔不能太短）
+        time.sleep(2.8)
 
     return list(dict.fromkeys(raw_urls))
 
@@ -319,14 +396,19 @@ def harvest_all_sources() -> Dict[str, List[str]]:
     all_file_urls: Set[str] = set(FALLBACK_GITHUB_MATRIX)
 
     print(f"[*] 正在检索 GitHub Code（每查询最多 {GITHUB_SEARCH_PAGES} 页 × {GITHUB_SEARCH_MAX_ITEMS} 条）与高星直播源池...", flush=True)
-    for q in search_queries:
+    # 启动时主动探测一次 Token 是否生效
+    _ = get_github_auth_headers()
+
+    for idx, q in enumerate(search_queries, 1):
         if _GITHUB_SEARCH_CIRCUIT_OPEN:
             print("[!] 已触发熔断，跳过剩余搜索查询。", flush=True)
             break
+        print(f"  → 查询 [{idx}/{len(search_queries)}]: {q[:60]}…", flush=True)
         found_urls = search_github_code_files(q, max_items=GITHUB_SEARCH_MAX_ITEMS, pages=GITHUB_SEARCH_PAGES)
         for u in found_urls:
             all_file_urls.add(u)
-        time.sleep(1.2)
+        # Search API 二级限流严格，查询之间多休息一会儿
+        time.sleep(3.5)
 
     print(f"[+] 汇集候选清单文件: {len(all_file_urls)} 个，启动多线程并发提取...", flush=True)
 
