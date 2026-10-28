@@ -6,7 +6,8 @@ IPTV 自动化五步工作流引擎 & 独立在线测速脚本 (TVBox 国内 IP 
   1. 首页搜索精准对齐：每仓库只提取 1 个排在最前面的最优文件，彻底解决 hebijunge 连续打开多个文件问题；
   2. 严格排除无展开文字内容的纯链接折叠项，确保不同仓库 (如 iptvjs/iptv-api) 被逐个打开；
   3. 第二步清洗严格拦截两 IP 相连的 /rtp/ 与 /udp/ 组播无图像假流；
-  4. 第五步日志明确区分“裂变新增达标源”与“累计总达标源”，两轮合并输出。
+  4. 第五步日志明确区分“裂变新增达标源”与“累计总达标源”，两轮合并输出；
+  5. 输出文件顶部添加更新时间提示：live.txt 首行标注更新时间频道，live.m3u 首条增加时间信息。
 """
 import argparse
 import datetime
@@ -717,6 +718,8 @@ def step5_merge_sort_and_export(
 ):
     step3_count = sum(len(v) for v in step3_qualified.values())
     step5_count = sum(len(v) for v in step5_qualified.values())
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
     print("\n" + "=" * 86, flush=True)
     print("🏆 【第五步(2/2)】汇总合并全部达标源，按清晰度优先 (1920x1080 且速度快在前 -> 720x576) 排序输出", flush=True)
     print(f"   - 第三步初次搜索达标源: {step3_count} 条", flush=True)
@@ -724,8 +727,16 @@ def step5_merge_sort_and_export(
     print(f"{'网页频道名称':<18} | {'有效源数':<8} | {'首选分辨率':<14} | {'首选实测速度':<13} | {'首包延迟':<10}", flush=True)
     print("-" * 86, flush=True)
 
-    txt_lines: List[str] = []
-    m3u_lines: List[str] = ['#EXTM3U x-tvg-url="https://live.fanmingming.com/e.xml"']
+    # 在 live.txt 与 live.m3u 首行顶部写入最新更新时间提示
+    txt_lines: List[str] = [
+        "更新时间,#genre#",
+        f"最新更新: {now_str},https://tvzb.github.io/IPTV/live.txt",
+    ]
+    m3u_lines: List[str] = [
+        '#EXTM3U x-tvg-url="https://live.fanmingming.com/e.xml"',
+        f'#EXTINF:-1 tvg-name="更新时间" group-title="更新时间",最新更新: {now_str}',
+        'https://tvzb.github.io/IPTV/live.m3u',
+    ]
 
     total_channels_ready = 0
     total_streams_ready = 0
@@ -782,6 +793,7 @@ def step5_merge_sort_and_export(
 
     print("=" * 86, flush=True)
     print(f"🎉 五步工作流全部完成！")
+    print(f"   - 订阅更新时间戳: {now_str}")
     print(f"   - 第三步初次搜索达标源: {step3_count} 条")
     print(f"   - 第五步智能裂变新增达标源: {step5_count} 条 (两轮合并去重后共收录: {total_streams_ready} 条)")
     print(f"   - 覆盖网页定制频道: {total_channels_ready} 个")
@@ -796,8 +808,16 @@ def save_intermediate_cleaned_pool(
     user_struct: Dict[str, List[str]],
     target_channels: Set[str]
 ):
-    txt_lines: List[str] = []
-    m3u_lines: List[str] = ['#EXTM3U x-tvg-url="https://live.fanmingming.com/e.xml"']
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    txt_lines: List[str] = [
+        "更新时间,#genre#",
+        f"待测源归档: {now_str},https://tvzb.github.io/IPTV/raw_sources.txt",
+    ]
+    m3u_lines: List[str] = [
+        '#EXTM3U x-tvg-url="https://live.fanmingming.com/e.xml"',
+        f'#EXTINF:-1 tvg-name="更新时间" group-title="更新时间",待测源归档: {now_str}',
+        'https://tvzb.github.io/IPTV/raw_sources.m3u',
+    ]
     for group_name, ch_list in user_struct.items():
         group_txt = [f"{group_name},#genre#"]
         for display_ch in ch_list:
@@ -852,8 +872,17 @@ def run_standalone_speedtest_mode(input_file: str, min_speed: float = MIN_SPEED_
         stage_title="【在线去重测速】国内 TVBox 播放仿真 & ffprobe 分辨率检测"
     )
 
-    out_txt_lines = ["测速优选频道,#genre#"]
-    out_m3u_lines = ['#EXTM3U x-tvg-url="https://live.fanmingming.com/e.xml"']
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    out_txt_lines = [
+        "更新时间,#genre#",
+        f"测速完成: {now_str},https://tvzb.github.io/IPTV/live.txt",
+        "测速优选频道,#genre#",
+    ]
+    out_m3u_lines = [
+        '#EXTM3U x-tvg-url="https://live.fanmingming.com/e.xml"',
+        f'#EXTINF:-1 tvg-name="更新时间" group-title="更新时间",测速完成: {now_str}',
+        'https://tvzb.github.io/IPTV/live.m3u',
+    ]
 
     for ch in channel_order:
         items = qualified.get(ch, [])
