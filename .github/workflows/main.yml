@@ -1,4 +1,4 @@
-name: IPTV 五步法自动采集与测速更新
+name: IPTV grok五步法自动采集与测速更新
 
 on:
   # 1. 支持在 GitHub Actions 页面手动点击 "Run workflow"，或通过网页端/外部 API 触发运行
@@ -37,7 +37,7 @@ jobs:
   harvest-and-speedtest:
     name: 智能载入频道配置 -> 首页精准搜索 -> 清洗去重 -> 央卫视裂变 -> 清晰度优先测速排序
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
 
     env:
       # 强制全局时区为北京时间，确保第一步搜索关键词 "更新 YYYY-MM" 日期准确
@@ -75,7 +75,7 @@ jobs:
           # 传入网页端提交的 JSON (如果是 GitHub 页面手动点击 Run workflow 则此项为空)
           CUSTOM_CHANNELS_JSON: ${{ github.event.inputs.custom_channels_json }}
         run: |
-          SPEED_LIMIT="${{ github.event.inputs.min_speed || '200' }}"
+          SPEED_LIMIT="${{ github.event.inputs.min_speed || '150' }}"
           echo "当前设定最低测速门槛: ${SPEED_LIMIT} KB/s"
           # 若网页端传来了自定义 JSON，同步持久化至 channels.json
           if [ -n "$CUSTOM_CHANNELS_JSON" ]; then
