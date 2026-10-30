@@ -1,7 +1,6 @@
-main_yml_content = r'''name: IPTV 五步法自动采集与测速更新
+name: IPTV 五步法自动采集与测速更新
 
 on:
-  # 1. 支持在 GitHub Actions 页面手动点击 "Run workflow"，或通过网页端/外部 API 触发运行
   workflow_dispatch:
     inputs:
       min_speed:
@@ -9,11 +8,10 @@ on:
         required: false
         default: '200'
       custom_channels_json:
-        description: '网页端设置的分类与频道列表 JSON (网页触发时传入；若为空，则自动采用 config.py 官方定义)'
+        description: '网页端设置的分类与频道列表 JSON (若为空则采用 config.py 官方定义)'
         required: false
         default: ''
 
-  # 3. 当修改了脚本或工作流配置文件推送到主分支时自动触发
   push:
     branches:
       - main
@@ -22,14 +20,12 @@ on:
       - 'main.py'
       - 'config.py'
       - 'channels.json'
-      - '.github/workflows/**'
+      - '.github/workflows/main.yml'
 
-# 并发控制：如果上一次任务还在测速中，新触发的任务将取消旧任务，避免冲突
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: iptv-five-step-${{ github.ref }}
   cancel-in-progress: true
 
-# 赋予 Actions 直接向仓库提交并推送更新后直播源文件的权限
 permissions:
   contents: write
 
@@ -37,28 +33,25 @@ jobs:
   harvest-and-speedtest:
     name: 首页20条全量提取 -> 清洗去重 -> 初次测速 -> 央卫视后缀智能裂变 -> 新增源二次测速排序
     runs-on: ubuntu-latest
-    # 首页 20 个结果全量打开提取后候选源增多，超时上限放宽至 45 分钟确保从容跑完
     timeout-minutes: 45
 
     env:
-      # 强制全局时区为北京时间，确保第一步搜索关键词 "更新 YYYY-MM" 日期准确
       TZ: Asia/Shanghai
-      # 强制 Python 实时无缓冲输出日志，在 Actions 界面可实时观察五步流水线
       PYTHONUNBUFFERED: "1"
 
     steps:
-      - name: 📥 1. 检出仓库代码
+      - name: 1. 检出仓库代码
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: 🐍 2. 配置 Python 3.11 运行环境
+      - name: 2. 配置 Python 3.11 运行环境
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: 🛠️ 3. 安装 FFmpeg (ffprobe 视频分辨率探针) 与 Python 依赖
+      - name: 3. 安装 FFmpeg 与 Python 依赖
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends ffmpeg
@@ -69,62 +62,49 @@ jobs:
             pip install requests urllib3
           fi
 
-      - name: 🚀 4. 执行 IPTV 五步工作流核心脚本
+      - name: 4. 执行 IPTV 五步工作流核心脚本
         env:
-          # 优先使用您在仓库 Secrets 中配置的个人 Token，未配置则使用默认 GITHUB_TOKEN
-          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
-          # 传入网页端提交的 JSON (如果是 GitHub 页面手动点击 Run workflow 或定时任务则此项为空)
-          CUSTOM_CHANNELS_JSON: ${{ github.event.inputs.custom_channels_json }}
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN || github.token }}
+          CUSTOM_CHANNELS_JSON: ${{ inputs.custom_channels_json }}
         run: |
-          SPEED_LIMIT="${{ github.event.inputs.min_speed || '200' }}"
+          SPEED_LIMIT="${{ inputs.min_speed }}"
+          if [ -z "$SPEED_LIMIT" ]; then
+            SPEED_LIMIT="200"
+          fi
           echo "当前设定最低测速门槛: ${SPEED_LIMIT} KB/s"
-          # 若网页端传来了自定义 JSON，同步持久化至 channels.json
           if [ -n "$CUSTOM_CHANNELS_JSON" ]; then
             echo "$CUSTOM_CHANNELS_JSON" > channels.json
-            echo "✅ 已接收网页端提交的自定义频道 JSON 并保存至 channels.json"
+            echo "已接收网页端提交的自定义频道 JSON 并保存至 channels.json"
           else
-            echo "ℹ️ 本次为手动点击 Run workflow 或定时任务，将采用 config.py 官方定义与排序"
+            echo "本次为手动点击 Run workflow 或定时任务，将采用 config.py 官方定义与排序"
           fi
           python main.py "${SPEED_LIMIT}"
 
-      - name: 🔍 5. 校验输出文件完整性 (防空文件保护)
-        id: verify_output
+      - name: 5. 校验并自动提交最新直播源至仓库
         run: |
           if [ ! -s "live.txt" ]; then
-            echo "❌ 错误：生成的 live.txt 为空或不存在，终止提交以保护 TVBox 正常播放！"
+            echo "错误：生成的 live.txt 为空或不存在，终止提交！"
             exit 1
           fi
           LINE_COUNT=$(wc -l < live.txt)
-          # 排除首行“最新更新”时间戳伪频道，统计真实有效的直播源条数
           STREAM_COUNT=$(grep -E "^[^#].*,http" live.txt | grep -v "^最新更新:" | wc -l || true)
-          echo "✅ 生成校验通过：live.txt 共 ${LINE_COUNT} 行，包含真实有效高清直播源 ${STREAM_COUNT} 条。"
+          echo "生成校验通过：live.txt 共 ${LINE_COUNT} 行，包含有效高清直播源 ${STREAM_COUNT} 条。"
           if [ "$STREAM_COUNT" -lt 5 ]; then
-            echo "⚠️ 警告：本次有效源数量过少 (<5条)，跳过覆盖提交以保留上一版可用源！"
-            echo "should_commit=false" >> $GITHUB_OUTPUT
-          else
-            echo "should_commit=true" >> $GITHUB_OUTPUT
+            echo "警告：本次有效源数量过少 (<5条)，跳过覆盖提交以保留上一版可用源！"
+            exit 0
           fi
 
-      - name: 📤 6. 自动提交并推送最新直播源至仓库
-        if: steps.verify_output.outputs.should_commit == 'true'
-        run: |
           git config --local user.name "github-actions[bot]"
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # 先暂存工作区生成的直播源文件，再拉取远端最新提交，彻底避免 git pull --rebase 因未提交修改而失败
           git add live.txt live.m3u raw_sources.txt raw_sources.m3u channels.json 2>/dev/null || git add live.txt live.m3u
 
           if git diff --staged --quiet; then
-            echo "ℹ️ 直播源列表与上一版本完全一致，无需重复提交。"
+            echo "直播源列表与上一版本完全一致，无需重复提交。"
           else
             NOW_TIME=$(date '+%Y-%m-%d %H:%M:%S')
             git commit -m "chore(live): 自动更新高清直播源(20条全量提取+后缀裂变,1080P优先) [${NOW_TIME}]"
             git pull --rebase origin ${{ github.ref_name }} || true
             git push origin HEAD:${{ github.ref_name }}
-            echo "🎉 最新 TVBox 直播源已成功推送到仓库！"
+            echo "最新 TVBox 直播源已成功推送到仓库！"
           fi
-'''
-
-with open("main.yml", "w", encoding="utf-8") as f:
-    f.write(main_yml_content)
-print("Saved main.yml successfully.")
