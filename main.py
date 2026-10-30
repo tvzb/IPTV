@@ -1,516 +1,6 @@
-config_code = '''# -*- coding: utf-8 -*-
-"""
-IPTV 配置模块：
-- 支持双模自动识别：
-  1. 网页点击运行：优先读取环境变量 CUSTOM_CHANNELS_JSON 或 channels.json；
-  2. GitHub 页面手动点击 "Run workflow" 或定时任务：统一采用本模块内置的官方频道名称与顺序定义：
-     - CCTV 1~17 综合/专业频道 (严格排除 CCTV-5+)
-     - 30 个省级卫视频道 (7个置顶优先卫视 + 23个按首字拼音升序排列卫视；已剔除康巴卫视与兵团卫视，福建卫视统一命名为东南卫视)
-- 核心提速与清洗规则：
-  - 彻底拦截两 IP 中间以 /rtp/ 或 /udp/ 连接的组播无图像假流、Flash、纯音频广播；
-  - 精准智能裂变：严格区分央视频道裂变（cctv1hd -> cctv1~17hd）与卫视频道裂变（dfwshd -> jxwshd/hnwshd 等），保留 hd/sd 等画质尾缀。
-"""
-import json
-import os
-import re
-import urllib.parse
-from typing import Dict, List, Optional, Set, Tuple
-
-# 输出文件路径定义
-CHANNELS_JSON_FILE = "channels.json"
-RAW_SOURCES_TXT = "raw_sources.txt"
-RAW_SOURCES_M3U = "raw_sources.m3u"
-OUTPUT_LIVE_TXT = "live.txt"
-OUTPUT_LIVE_M3U = "live.m3u"
-
-# 仿真国内 TVBox (ExoPlayer / IjkPlayer) 标识与国内 IP 请求头
-TVBOX_USER_AGENT = "okhttp/3.15"
-DOMESTIC_SIM_IPS = [
-    "114.114.114.114",
-    "223.5.5.5",
-    "119.29.29.29",
-    "202.96.128.86",
-    "61.139.2.69",
-]
-
-# 测速与并发参数
-REQUEST_TIMEOUT = 2.5
-CHUNK_DOWNLOAD_TIMEOUT = 2.0
-CHUNK_DOWNLOAD_MAX_BYTES = 512 * 1024  # 512KB 采样即可完整读取 TS 头与 ffprobe 视频轨
-MAX_WORKERS = 40
-MIN_SPEED_KBS = 200.0  # 默认最低有效速度阈值 (KB/s)
-MAX_CANDIDATES_PER_CHANNEL = 35  # 每个频道最多候选测速源数（防止测速总量失控）
-MAX_SAME_IP_PER_CHANNEL = 3
-
-# 官方默认央视频道（CCTV 1~17，严格排除 CCTV-5+）
-DEFAULT_CCTV_CHANNELS = [
-    "CCTV-1 综合", "CCTV-2 财经", "CCTV-3 综艺", "CCTV-4 中文国际",
-    "CCTV-5 体育", "CCTV-6 电影", "CCTV-7 国防军事", "CCTV-8 电视剧",
-    "CCTV-9 纪录", "CCTV-10 科教", "CCTV-11 戏曲", "CCTV-12 社会与法",
-    "CCTV-13 新闻", "CCTV-14 少儿", "CCTV-15 音乐", "CCTV-16 奥林匹克",
-    "CCTV-17 农业农村",
-]
-
-# 官方默认省级卫视频道（7个指定置顶优先卫视 + 23个按首字拼音升序排列省级卫视；已剔除康巴/兵团，福建统一为东南卫视）
-DEFAULT_SATELLITE_CHANNELS = [
-    # 7个置顶优先卫视
-    "江西卫视", "东方卫视", "北京卫视", "江苏卫视", "浙江卫视", "湖南卫视", "辽宁卫视",
-    # 其余23个省级卫视（严格按首字汉语拼音字母升序排列）
-    "安徽卫视",   # Anhui
-    "重庆卫视",   # Chongqing
-    "东南卫视",   # Dongnan (福建卫视统一为东南卫视)
-    "甘肃卫视",   # Gansu
-    "广东卫视",   # Guangdong
-    "广西卫视",   # Guangxi
-    "贵州卫视",   # Guizhou
-    "海南卫视",   # Hainan
-    "河北卫视",   # Hebei
-    "河南卫视",   # Henan
-    "黑龙江卫视", # Heilongjiang
-    "湖北卫视",   # Hubei
-    "吉林卫视",   # Jilin
-    "内蒙古卫视", # Neimenggu
-    "宁夏卫视",   # Ningxia
-    "青海卫视",   # Qinghai
-    "山东卫视",   # Shandong
-    "山西卫视",   # Shanxi
-    "陕西卫视",   # Shaanxi
-    "深圳卫视",   # Shenzhen
-    "四川卫视",   # Sichuan
-    "天津卫视",   # Tianjin
-    "西藏卫视",   # Xizang
-    "新疆卫视",   # Xinjiang
-    "云南卫视",   # Yunnan
-]
-
-ALL_DEFAULT_TARGETS = DEFAULT_CCTV_CHANNELS + DEFAULT_SATELLITE_CHANNELS
-
-# 卫视频道【拼音缩写】对照字典（用于 dfwshd -> jxwshd / hnwshd 同构缩写裂变）
-SATELLITE_ABBR_SLUGS: Dict[str, List[str]] = {
-    "江西卫视": ["jxws", "jx"],
-    "东方卫视": ["dfws", "shws", "df"],
-    "北京卫视": ["bjws", "btv1", "bj"],
-    "江苏卫视": ["jsws", "js"],
-    "浙江卫视": ["zjws", "zj"],
-    "湖南卫视": ["hnws", "hunws", "hn"],
-    "辽宁卫视": ["lnws", "ln"],
-    "安徽卫视": ["ahws", "ah"],
-    "重庆卫视": ["cqws", "cq"],
-    "东南卫视": ["dnws", "fjws", "dn"],
-    "甘肃卫视": ["gsws", "gs"],
-    "广东卫视": ["gdws", "gd"],
-    "广西卫视": ["gxws", "gx"],
-    "贵州卫视": ["gzws", "gz"],
-    "海南卫视": ["hnws2", "lyws", "hinws"],
-    "河北卫视": ["hbws", "hews", "hebws"],
-    "河南卫视": ["hnaws", "henws"],
-    "黑龙江卫视": ["hljws", "hljs", "hlj"],
-    "湖北卫视": ["hubws", "hbws"],
-    "吉林卫视": ["jlws", "jl"],
-    "内蒙古卫视": ["nmgws", "nmws", "nmg"],
-    "宁夏卫视": ["nxws", "nx"],
-    "青海卫视": ["qhws", "qh"],
-    "山东卫视": ["sdws", "sd"],
-    "山西卫视": ["sxaws", "shanxiws"],
-    "陕西卫视": ["sxws", "shaanxiws"],
-    "深圳卫视": ["szws", "sz"],
-    "四川卫视": ["scws", "sc"],
-    "天津卫视": ["tjws", "tj"],
-    "西藏卫视": ["xzws", "xz"],
-    "新疆卫视": ["xjws", "xj"],
-    "云南卫视": ["ynws", "yn"],
-}
-
-# 卫视频道【全拼】对照字典（用于 dongfang -> jiangxi / hunan 同构全拼裂变）
-SATELLITE_PINYIN_SLUGS: Dict[str, List[str]] = {
-    "江西卫视": ["jiangxi", "jiangxiws"],
-    "东方卫视": ["dongfang", "dongfangws", "shanghai", "shanghaiws"],
-    "北京卫视": ["beijing", "beijingws"],
-    "江苏卫视": ["jiangsu", "jiangsuws"],
-    "浙江卫视": ["zhejiang", "zhejiangws"],
-    "湖南卫视": ["hunan", "hunanws"],
-    "辽宁卫视": ["liaoning", "liaoningws"],
-    "安徽卫视": ["anhui", "anhuiws"],
-    "重庆卫视": ["chongqing", "chongqingws"],
-    "东南卫视": ["dongnan", "dongnanws", "fujian", "fujianws"],
-    "甘肃卫视": ["gansu", "gansuws"],
-    "广东卫视": ["guangdong", "guangdongws"],
-    "广西卫视": ["guangxi", "guangxiws"],
-    "贵州卫视": ["guizhou", "guizhouws"],
-    "海南卫视": ["hainan", "hainanws", "lvyou"],
-    "河北卫视": ["hebei", "hebeiws"],
-    "河南卫视": ["henan", "henanws"],
-    "黑龙江卫视": ["heilongjiang", "heilongjiangws"],
-    "湖北卫视": ["hubei", "hubeiws"],
-    "吉林卫视": ["jilin", "jilinws"],
-    "内蒙古卫视": ["neimenggu", "neimengguws"],
-    "宁夏卫视": ["ningxia", "ningxiaws"],
-    "青海卫视": ["qinghai", "qinghaiws"],
-    "山东卫视": ["shandong", "shandongws"],
-    "山西卫视": ["shanxi", "shanxiws"],
-    "陕西卫视": ["shaanxi", "shaanxiws"],
-    "深圳卫视": ["shenzhen", "shenzhenws"],
-    "四川卫视": ["sichuan", "sichuanws"],
-    "天津卫视": ["tianjin", "tianjinws"],
-    "西藏卫视": ["xizang", "xizangws"],
-    "新疆卫视": ["xinjiang", "xinjiangws"],
-    "云南卫视": ["yunnan", "yunnanws"],
-}
-
-# 黑名单正则规则：拦截两IP相连的 /rtp/ 与 /udp/ 组播假流、Flash、纯音频、一次性Token等
-BLACKLIST_URL_PATTERNS = re.compile(
-    r'('
-    r'/(rtp|udp)/|'                     # 拦截两IP中间以/rtp/或/udp/相连的组播假源
-    r'\\.swf(\\?|$)|'                   # 拦截 Flash 插件
-    r'/audio/|'                         # 拦截纯音频广播源
-    r'audio\\.|'                        # 拦截音频子域名
-    r'/radio/|'                         # 拦截电台广播路径
-    r'\\.(mp3|aac|wav|ogg|flac|apk|jpg|png|gif)(\\?|$)|'
-    r'jdshipin\\.com|'                  # 拦截假源
-    r'264788\\.xyz|'                    # 拦截一次性 livekey 代理源
-    r'[?&](livekey|migutoken|auth_key|txSecret|wsSecret)=|'
-    r'P2PChannelID=pd://'
-    r')',
-    re.IGNORECASE
-)
-
-
-def get_domestic_headers(extra_headers: Dict[str, str] = None) -> Dict[str, str]:
-    ip = DOMESTIC_SIM_IPS[0]
-    headers = {
-        "User-Agent": TVBOX_USER_AGENT,
-        "Accept": "*/*",
-        "Accept-Language": "zh-CN,zh;q=0.9",
-        "Connection": "keep-alive",
-        "X-Forwarded-For": ip,
-        "X-Real-IP": ip,
-        "Client-IP": ip,
-    }
-    if extra_headers:
-        headers.update(extra_headers)
-    return headers
-
-
-def load_user_channel_structure() -> Dict[str, List[str]]:
-    """
-    智能载入频道配置：
-    - 若网页端传入环境变量 CUSTOM_CHANNELS_JSON，则优先载入网页端自定义的频道顺序；
-    - 若存在 channels.json，则读取 channels.json；
-    - 否则自动采用 config.py 内置官方标准定义 (CCTV 1~17 排除 5+，7优先+23拼音省级卫视)。
-    """
-    env_json = os.environ.get("CUSTOM_CHANNELS_JSON", "").strip()
-    if env_json:
-        try:
-            data = json.loads(env_json)
-            if isinstance(data, dict) and len(data) > 0:
-                print(f"[*] 【运行模式】网页端触发：载入网站自定义分类 ({len(data)} 个分类)", flush=True)
-                return data
-            elif isinstance(data, list) and len(data) > 0:
-                parsed_dict = {}
-                for item in data:
-                    if isinstance(item, dict) and "category" in item and "channels" in item:
-                        parsed_dict[item["category"]] = list(item["channels"])
-                if parsed_dict:
-                    print(f"[*] 【运行模式】网页端触发：载入网站数组分类 ({len(parsed_dict)} 个分类)", flush=True)
-                    return parsed_dict
-        except Exception as e:
-            print(f"[!] 解析网页端 CUSTOM_CHANNELS_JSON 异常: {e}", flush=True)
-
-    if os.path.exists(CHANNELS_JSON_FILE):
-        try:
-            with open(CHANNELS_JSON_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict) and len(data) > 0:
-                print(f"[*] 已从 {CHANNELS_JSON_FILE} 加载频道列表 ({len(data)} 个分类)", flush=True)
-                return data
-        except Exception:
-            pass
-
-    print("[*] 【运行模式】采用 config.py 官方定义 (CCTV 1~17 排除 5+，7优先+23拼音省级卫视，已剔除康巴/兵团，福建统一为东南卫视)", flush=True)
-    return {
-        "央视频道": list(DEFAULT_CCTV_CHANNELS),
-        "卫视频道": list(DEFAULT_SATELLITE_CHANNELS),
-    }
-
-
-def is_blacklisted_url(url: str) -> bool:
-    if not url:
-        return True
-    return bool(BLACKLIST_URL_PATTERNS.search(url))
-
-
-def clean_stream_url(raw_url: str) -> str:
-    if not raw_url:
-        return ""
-    url = raw_url.strip()
-    m = re.search(r'(https?://[^\\s"\'<>]+)', url)
-    if m:
-        url = m.group(1)
-    if "$" in url:
-        url = url.split("$", 1)[0].strip()
-    # 彻底拦截 /rtp/ 与 /udp/ 组播假源
-    if "/rtp/" in url.lower() or "/udp/" in url.lower():
-        return ""
-    if is_blacklisted_url(url):
-        return ""
-    return url
-
-
-def normalize_channel_name(raw_name: str, custom_targets: Set[str] = None) -> str:
-    if not raw_name:
-        return ""
-    if any(k in raw_name for k in ("广播", "电台", "之声", "FM", "调频")):
-        return ""
-
-    clean_name = raw_name.strip()
-
-    # 排除非省级卫视 (康巴卫视、兵团卫视)
-    if any(bad in clean_name for bad in ("康巴", "兵团")):
-        return ""
-
-    # 严格排除 CCTV-5+
-    if re.search(r'(?i)cctv[-_ ]?5\\+', clean_name):
-        return ""
-
-    # 福建卫视/福建电视台 统一命名为 东南卫视
-    if any(k in clean_name for k in ("福建卫视", "福建台", "福建省台", "海峡卫视")):
-        return "东南卫视"
-
-    if custom_targets and clean_name in custom_targets:
-        return clean_name
-
-    cctv_match = re.search(r'(?i)(?:cctv|中央)[-_ ]?0?(\\d{1,2})(?!\\d)', clean_name)
-    if cctv_match:
-        num = int(cctv_match.group(1))
-        if 1 <= num <= 17:
-            prefix = f"CCTV-{num} "
-            for std_cctv in DEFAULT_CCTV_CHANNELS:
-                if std_cctv.startswith(prefix):
-                    return std_cctv
-            return f"CCTV-{num}"
-
-    for sat in DEFAULT_SATELLITE_CHANNELS:
-        keyword = sat.replace("卫视", "")
-        if keyword in clean_name and ("卫视" in clean_name or sat in clean_name or "台" in clean_name):
-            return sat
-        if sat == "东方卫视" and ("上海卫视" in clean_name or "东方台" in clean_name):
-            return "东方卫视"
-
-    if custom_targets:
-        name_stripped = re.sub(r'[\\s\\-_高清超清HD4K8K]', '', clean_name.upper())
-        for target in custom_targets:
-            t_norm = re.sub(r'[\\s\\-_高清超清HD4K8K]', '', target.upper())
-            if t_norm and t_norm == name_stripped:
-                return target
-
-    return clean_name
-
-
-def build_channel_Lookup_map(user_struct: Dict[str, List[str]]) -> Tuple[Set[str], Dict[str, str]]:
-    target_norm_set: Set[str] = set()
-    norm_to_display: Dict[str, str] = {}
-    raw_custom_set: Set[str] = set()
-
-    for ch_list in user_struct.values():
-        for ch in ch_list:
-            raw_custom_set.add(ch.strip())
-
-    for ch_list in user_struct.values():
-        for display_ch in ch_list:
-            display_ch = display_ch.strip()
-            if not display_ch:
-                continue
-            norm_key = normalize_channel_name(display_ch, raw_custom_set) or display_ch
-            target_norm_set.add(norm_key)
-            if norm_key not in norm_to_display:
-                norm_to_display[norm_key] = display_ch
-
-    return target_norm_set, norm_to_display
-
-
-def extract_ip_port(url: str) -> Optional[str]:
-    try:
-        parsed = urllib.parse.urlparse(url)
-        netloc = parsed.netloc
-        if not netloc:
-            return None
-        ip_match = re.match(r'^(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}(?::\\d+)?)', netloc)
-        if ip_match:
-            return ip_match.group(1)
-        if ":" in netloc:
-            return netloc
-    except Exception:
-        pass
-    return None
-
-
-def extrapolate_channels_from_seed(seed_url: str, seed_channel: str = "") -> List[Tuple[str, str]]:
-    """
-    智能裂变引擎：
-    根据已测速合格的直播源地址与所属频道名称之间的对应规律，精准裂变出同系列的全部央视或卫视频道：
-    1. 央视频道裂变：
-       例如 `CCTV-1 综合,http://198.204.228.26/live/cctv1hd.m3u8`
-       识别出 `cctv1` 对应 `CCTV-1` 且尾缀为 `hd.m3u8`，自动裂变出 `cctv1hd.m3u8` ~ `cctv17hd.m3u8` 全部 17 个央视频道。
-    2. 卫视频道裂变：
-       例如 `东方卫视,http://107.150.60.122/live/dfwshd.m3u8`
-       识别出 `dfws` 对应 `东方卫视` 且画质尾缀为 `hd.m3u8`，自动将 `dfws` 替换为 `jxws` (江西卫视)、`hnws` (湖南卫视) 等，
-       生成 `http://107.150.60.122/live/jxwshd.m3u8`、`http://107.150.60.122/live/hnwshd.m3u8` 等全部 30 个省级卫视频道。
-    """
-    results: List[Tuple[str, str]] = []
-    clean_seed = clean_stream_url(seed_url)
-    if not clean_seed or is_blacklisted_url(clean_seed):
-        return results
-
-    if "/rtp/" in clean_seed.lower() or "/udp/" in clean_seed.lower():
-        return results
-
-    if clean_seed.count("&") >= 4 or ".swf" in clean_seed.lower():
-        return results
-
-    # =========================================================================
-    # 规则 1：标准 CCTV 标识裂变 (如 cctv1hd.m3u8 -> cctv1hd.m3u8 ~ cctv17hd.m3u8)
-    # =========================================================================
-    cctv_pattern = re.search(
-        r'([/=_.-])(cctv[-_]?0?(\\d{1,2}))([a-zA-Z0-9_\\-]*)(\\.m3u8|\\.flv|\\.ts|/|$|\\?)',
-        clean_seed,
-        re.IGNORECASE
-    )
-    if cctv_pattern:
-        prefix = clean_seed[:cctv_pattern.start(2)]
-        matched_token = cctv_pattern.group(2)
-        num_part = cctv_pattern.group(3)
-        extra_tag = cctv_pattern.group(4)  # 如 hd, sd, _hd, _1080p 等画质后缀完整保留
-        suffix = clean_seed[cctv_pattern.end(4):]
-
-        has_hyphen = "-" in matched_token
-        has_underscore = "_" in matched_token
-        has_zero = num_part.startswith("0") and len(num_part) == 2
-
-        for std_ch in DEFAULT_CCTV_CHANNELS:
-            num = int(std_ch.split()[0].replace("CCTV-", ""))
-            num_str = f"0{num}" if has_zero and num < 10 else str(num)
-            if has_hyphen:
-                token = f"cctv-{num_str}"
-            elif has_underscore:
-                token = f"cctv_{num_str}"
-            else:
-                token = f"cctv{num_str}"
-            if matched_token.isupper():
-                token = token.upper()
-            extrapolated_url = f"{prefix}{token}{extra_tag}{suffix}"
-            results.append((std_ch, extrapolated_url))
-        return results
-
-    # =========================================================================
-    # 规则 2：卫视频道缩写/全拼标识裂变 (如 dfwshd.m3u8 -> jxwshd.m3u8, hnwshd.m3u8)
-    # 严格保留原本的画质后缀 (如 hd / sd / _hd / fhd) 与扩展名 (.m3u8)
-    # =========================================================================
-    norm_seed_ch = normalize_channel_name(seed_channel) if seed_channel else ""
-
-    # 优先按照当前种子频道的已知缩写/全拼进行精准定位，若未指定则全局扫描卫视特征词
-    sat_check_order = []
-    if norm_seed_ch in DEFAULT_SATELLITE_CHANNELS:
-        sat_check_order.append(norm_seed_ch)
-    for ch in DEFAULT_SATELLITE_CHANNELS:
-        if ch not in sat_check_order:
-            sat_check_order.append(ch)
-
-    # 2A. 匹配缩写体系 (如 dfws + hd -> jxws + hd, hnws + hd)
-    for sat_ch in sat_check_order:
-        abbr_list = SATELLITE_ABBR_SLUGS.get(sat_ch, [])
-        for slug in abbr_list:
-            # 要求后面紧跟常见画质修饰词(hd/sd/fhd/4k/1080p/空)及路径结束或扩展名，防止短词误匹配域名
-            m = re.search(
-                rf'([/=_.-])({re.escape(slug)})((?:[-_]?(?:hd|sd|fhd|uhd|4k|1080p|720p|1|2))?)(\\.m3u8|\\.flv|\\.ts|/|$|\\?)',
-                clean_seed,
-                re.IGNORECASE
-            )
-            if m:
-                prefix = clean_seed[:m.start(2)]
-                matched_slug = m.group(2)
-                quality_tag = m.group(3)  # 完整保留 hd / _hd 等后缀
-                suffix = clean_seed[m.end(3):]
-
-                # 判断原本是带 ws (如 dfws) 还是纯两字母省份简写 (如 df)
-                use_ws_style = matched_slug.lower().endswith("ws") or len(matched_slug) >= 4
-                for target_sat in DEFAULT_SATELLITE_CHANNELS:
-                    target_candidates = SATELLITE_ABBR_SLUGS.get(target_sat, [])
-                    if not target_candidates:
-                        continue
-                    chosen_slug = target_candidates[0]
-                    if not use_ws_style and len(target_candidates) > 1:
-                        chosen_slug = target_candidates[-1]
-                    if matched_slug.isupper():
-                        chosen_slug = chosen_slug.upper()
-                    extrapolated_url = f"{prefix}{chosen_slug}{quality_tag}{suffix}"
-                    results.append((target_sat, extrapolated_url))
-                return results
-
-    # 2B. 匹配全拼体系 (如 dongfanghd.m3u8 -> jiangxihd.m3u8, hunanhd.m3u8)
-    for sat_ch in sat_check_order:
-        pinyin_list = SATELLITE_PINYIN_SLUGS.get(sat_ch, [])
-        for slug in pinyin_list:
-            m = re.search(
-                rf'([/=_.-])({re.escape(slug)})((?:[-_]?(?:ws|hd|sd|fhd|uhd|4k|1080p|720p|1|2))*)(\\.m3u8|\\.flv|\\.ts|/|$|\\?)',
-                clean_seed,
-                re.IGNORECASE
-            )
-            if m:
-                prefix = clean_seed[:m.start(2)]
-                matched_slug = m.group(2)
-                quality_tag = m.group(3)
-                suffix = clean_seed[m.end(3):]
-
-                has_ws_in_slug = matched_slug.lower().endswith("ws")
-                for target_sat in DEFAULT_SATELLITE_CHANNELS:
-                    target_candidates = SATELLITE_PINYIN_SLUGS.get(target_sat, [])
-                    if not target_candidates:
-                        continue
-                    chosen_slug = target_candidates[1] if (has_ws_in_slug and len(target_candidates) > 1) else target_candidates[0]
-                    if matched_slug.isupper():
-                        chosen_slug = chosen_slug.upper()
-                    extrapolated_url = f"{prefix}{chosen_slug}{quality_tag}{suffix}"
-                    results.append((target_sat, extrapolated_url))
-                return results
-
-    # =========================================================================
-    # 规则 3：央视频道四位/三位数字序号规律 (如 0001_1.m3u8 -> 0001_1 ~ 0017_1)
-    # 仅当种子频道本身是 CCTV 频道时触发，避免误将卫视数字ID当作央视裂变
-    # =========================================================================
-    if not norm_seed_ch or norm_seed_ch.startswith("CCTV"):
-        num_seq_match = re.search(r'([/_])(0*(\\d{1,4}))(_\\d+)?(\\.m3u8|\\.ts|\\.flv)', clean_seed, re.IGNORECASE)
-        if num_seq_match:
-            delimiter = num_seq_match.group(1)
-            full_num_str = num_seq_match.group(2)
-            raw_num = int(num_seq_match.group(3))
-            sub_tag = num_seq_match.group(4) or ""
-            ext = num_seq_match.group(5)
-            num_len = len(full_num_str)
-
-            if 1 <= raw_num <= 17:
-                prefix = clean_seed[:num_seq_match.start()]
-                suffix = clean_seed[num_seq_match.end():]
-                for std_ch in DEFAULT_CCTV_CHANNELS:
-                    cctv_num = int(std_ch.split()[0].replace("CCTV-", ""))
-                    formatted_num = f"{cctv_num:0{num_len}d}"
-                    extrapolated_url = f"{prefix}{delimiter}{formatted_num}{sub_tag}{ext}{suffix}"
-                    results.append((std_ch, extrapolated_url))
-                return results
-
-    return results
-'''
-
-main_code = '''# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 IPTV 自动化五步工作流引擎 & 独立在线测速脚本 (TVBox 国内 IP 仿真 + 清晰度优先排序版)
-
-核心改进落实：
-  1. 直接读取并下载文件链接，绝不打开仓库主页，移除 `seen_repos` 同仓库跳过限制；
-  2. 搜索结果首页 20 条有预览的结果全部打开提取（20/20 全量提取），大幅扩充有效源基数；
-  3. 智能裂变精准对齐：
-     - 央视频道（如 cctv1hd.m3u8 -> cctv1hd.m3u8 ~ cctv17hd.m3u8 裂变全部 17 个央视）；
-     - 卫视频道（如 dfwshd.m3u8 -> jxwshd.m3u8、hnwshd.m3u8 等裂变全部 30 个卫视，保留 hd/sd 等画质尾缀）；
-  4. 二次测速严格去重：只对第四步裂变后【新出现】的直播源地址进行测速，裂变前已测过速的地址绝不重复测速。
 """
 import argparse
 import datetime
@@ -551,12 +41,12 @@ from config import (
 HEADERS = get_domestic_headers()
 
 FALLBACK_GITHUB_MATRIX = [
-    "https://raw.githubusercontent.com/Guovin/iptv-api/gd/output/result.txt",
-    "https://raw.githubusercontent.com/iptvjs/iptv-api/main/output/user_result.txt",
-    "https://raw.githubusercontent.com/cymz6/AutoIPTV-Hotel/main/lives.txt",
-    "https://raw.githubusercontent.com/Ftindy/IPTV-URL/main/output/result.txt",
-    "https://raw.githubusercontent.com/vbskycn/iptv/master/tv/hd.txt",
-    "https://raw.githubusercontent.com/fanmingming/live/main/tv/m3u/ipv4.m3u",
+    "[https://raw.githubusercontent.com/Guovin/iptv-api/gd/output/result.txt](https://raw.githubusercontent.com/Guovin/iptv-api/gd/output/result.txt)",
+    "[https://raw.githubusercontent.com/iptvjs/iptv-api/main/output/user_result.txt](https://raw.githubusercontent.com/iptvjs/iptv-api/main/output/user_result.txt)",
+    "[https://raw.githubusercontent.com/cymz6/AutoIPTV-Hotel/main/lives.txt](https://raw.githubusercontent.com/cymz6/AutoIPTV-Hotel/main/lives.txt)",
+    "[https://raw.githubusercontent.com/Ftindy/IPTV-URL/main/output/result.txt](https://raw.githubusercontent.com/Ftindy/IPTV-URL/main/output/result.txt)",
+    "[https://raw.githubusercontent.com/vbskycn/iptv/master/tv/hd.txt](https://raw.githubusercontent.com/vbskycn/iptv/master/tv/hd.txt)",
+    "[https://raw.githubusercontent.com/fanmingming/live/main/tv/m3u/ipv4.m3u](https://raw.githubusercontent.com/fanmingming/live/main/tv/m3u/ipv4.m3u)",
 ]
 
 
@@ -598,16 +88,13 @@ def get_github_search_headers() -> Dict[str, str]:
 
 
 def convert_github_item_to_raw_url(item: dict) -> str:
-    """
-    直接将搜索结果条目中的文件链接转换为 raw 文件直链，无需打开仓库主页。
-    """
     html_url = item.get("html_url", "")
-    if html_url and "github.com/" in html_url and "/blob/" in html_url:
-        return html_url.replace("https://github.com/", "https://raw.githubusercontent.com/").replace("/blob/", "/")
+    if html_url and "[github.com/](https://github.com/)" in html_url and "/blob/" in html_url:
+        return html_url.replace("[https://github.com/](https://github.com/)", "[https://raw.githubusercontent.com/](https://raw.githubusercontent.com/)").replace("/blob/", "/")
     repo_full_name = item.get("repository", {}).get("full_name", "")
     file_path = item.get("path", "")
     if repo_full_name and file_path:
-        return f"https://raw.githubusercontent.com/{repo_full_name}/main/{file_path}"
+        return f"[https://raw.githubusercontent.com/](https://raw.githubusercontent.com/){repo_full_name}/main/{file_path}"
     return ""
 
 
@@ -615,17 +102,12 @@ def search_github_first_page_with_preview(
     query: str,
     per_page: int = 20
 ) -> List[Tuple[str, str, str]]:
-    """
-    搜索第 1 页 (page=1, per_page=20，与 GitHub 网页端第一页 20 个结果完全一致)：
-      1. 绝不打开仓库主页，直接提取每个条目后面的文件路径链接（如 raw/live/history/2026-10-13/result.txt）；
-      2. 移除同仓库跳过限制：首页 20 条只要有展开预览内容，全部逐条打开提取（20/20 全量打开），确保有效源充足！
-    """
     headers = get_github_search_headers()
     valid_results: List[Tuple[str, str, str]] = []
     seen_raws: Set[str] = set()
 
     encoded_q = urllib.parse.quote(query)
-    api_url = f"https://api.github.com/search/code?q={encoded_q}&per_page={per_page}&page=1"
+    api_url = f"[https://api.github.com/search/code?q=](https://api.github.com/search/code?q=){encoded_q}&per_page={per_page}&page=1"
 
     try:
         resp = requests.get(api_url, headers=headers, timeout=12)
@@ -635,14 +117,12 @@ def search_github_first_page_with_preview(
             for idx, item in enumerate(items, 1):
                 repo_name = item.get("repository", {}).get("full_name", "")
                 file_path = item.get("path", "")
-                # 直接展示文件路径及所属标识
                 display_name = f"{file_path} ({repo_name})"
 
                 text_matches = item.get("text_matches", [])
                 fragments = [tm.get("fragment", "").strip() for tm in text_matches if tm.get("fragment", "").strip()]
-                combined_preview = "\\n".join(fragments)
+                combined_preview = "\n".join(fragments)
 
-                # 若无展开代码预览片段，则跳过纯链接
                 if not combined_preview:
                     print(f"  [跳过 {idx}/{len(items)}] {display_name} -> 无展开代码预览片段", flush=True)
                     continue
@@ -726,7 +206,7 @@ def step1_search_and_extract(target_channels: Set[str]) -> List[Tuple[str, str]]
     visited_raw_files: Set[str] = set()
 
     for q in exact_queries:
-        print(f"\\n[*] 正在搜索首页关键词: 「{q}」 (第 1 页 20 条有预览的文件链接全部打开提取)...", flush=True)
+        print(f"\n[*] 正在搜索首页关键词: 「{q}」 (第 1 页 20 条有预览的文件链接全部打开提取)...", flush=True)
         search_items = search_github_first_page_with_preview(q, per_page=20)
         if not search_items:
             print(f"  [-] 未获取到「{q}」的带预览搜索结果。", flush=True)
@@ -756,7 +236,7 @@ def step1_search_and_extract(target_channels: Set[str]) -> List[Tuple[str, str]]
 
         time.sleep(1.0)
 
-    print("\\n[*] 正在同步国内高活性直播源补充矩阵...", flush=True)
+    print("\n[*] 正在同步国内高活性直播源补充矩阵...", flush=True)
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         future_map = {executor.submit(fetch_file_content, u): u for u in FALLBACK_GITHUB_MATRIX if u not in visited_raw_files}
         for fut in as_completed(future_map):
@@ -767,7 +247,7 @@ def step1_search_and_extract(target_channels: Set[str]) -> List[Tuple[str, str]]
                     if norm_ch in target_channels:
                         raw_extracted_records.append((norm_ch, raw_url_str))
 
-    print(f"\\n[✓] 第一步完成：共打开 {len(visited_raw_files)} 个搜索结果文件，提取到符合目标频道的原始记录 {len(raw_extracted_records)} 条。", flush=True)
+    print(f"\n[✓] 第一步完成：共打开 {len(visited_raw_files)} 个搜索结果文件，提取到符合目标频道的原始记录 {len(raw_extracted_records)} 条。", flush=True)
     return raw_extracted_records
 
 
@@ -775,7 +255,7 @@ def step2_clean_and_deduplicate(
     raw_records: List[Tuple[str, str]],
     target_channels: Set[str]
 ) -> Tuple[Dict[str, List[str]], Set[str]]:
-    print("\\n" + "=" * 76, flush=True)
+    print("\n" + "=" * 76, flush=True)
     print("🧹 【第二步】清洗提取结果 ($尾缀剔除、拦截/rtp/与/udp/组播假源、HTTP严格去重与配额控制)", flush=True)
     print("=" * 76, flush=True)
 
@@ -805,7 +285,7 @@ def step2_clean_and_deduplicate(
             blocked_udpxy_count += 1
             continue
 
-        if re.search(r'http://\\[[0-9a-fA-F:]+\\]', clean_url):
+        if re.search(r'http://\[[0-9a-fA-F:]+\]', clean_url):
             continue
 
         std_ch = normalize_channel_name(raw_ch, target_channels)
@@ -839,13 +319,13 @@ def step2_clean_and_deduplicate(
 
 
 def check_hls_stream_security(m3u8_text: str, base_url: str) -> Tuple[bool, str]:
-    key_match = re.search(r'#EXT-X-KEY:METHOD=([A-Z0-9\\-]+).*?URI="([^"]+)"', m3u8_text)
+    key_match = re.search(r'#EXT-X-KEY:METHOD=([A-Z0-9\-]+).*?URI="([^"]+)"', m3u8_text)
     if key_match:
         method = key_match.group(1).upper()
         if method != "NONE":
             key_uri = key_match.group(2)
             full_key_url = urllib.parse.urljoin(base_url, key_uri)
-            if re.search(r'(10\\.\\d+|192\\.168\\.\\d+|172\\.(1[6-9]|2\\d|3[01])\\.\\d+|127\\.0\\.0\\.1|localhost)', full_key_url):
+            if re.search(r'(10\.\d+|192\.168\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+|127\.0\.0\.1|localhost)', full_key_url):
                 return False, "内网私有密钥不可达"
             try:
                 kr = requests.get(full_key_url, headers=HEADERS, timeout=2.5)
@@ -955,7 +435,7 @@ def test_single_stream_tvbox(channel_name: str, stream_url: str) -> Tuple[str, s
                 full_m3u8 = m3u8_resp.text
 
                 if "#EXT-X-STREAM-INF" in full_m3u8:
-                    m_res = re.search(r'RESOLUTION=(\\d+)x(\\d+)', full_m3u8)
+                    m_res = re.search(r'RESOLUTION=(\d+)x(\d+)', full_m3u8)
                     if m_res:
                         m3u8_res_hint = (int(m_res.group(1)), int(m_res.group(2)))
                     sub_playlists = [
@@ -990,7 +470,7 @@ def test_single_stream_tvbox(channel_name: str, stream_url: str) -> Tuple[str, s
         for tu in ts_urls:
             if is_blacklisted_url(tu):
                 return channel_name, clean_url, 0.0, ttfb_ms, 0, 0, False, "切片命中音频/黑名单"
-            if re.search(r'(10\\.\\d+|192\\.168\\.\\d+|172\\.(1[6-9]|2\\d|3[01])\\.\\d+|127\\.0\\.0\\.1|localhost)', tu):
+            if re.search(r'(10\.\d+|192\.168\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+|127\.0\.0\.1|localhost)', tu):
                 return channel_name, clean_url, 0.0, ttfb_ms, 0, 0, False, "内网切片不可达"
 
         download_start = time.time()
@@ -1069,7 +549,7 @@ def batch_evaluate_streams(
         for u in urls:
             tasks.append((ch, u))
 
-    print("\\n" + "=" * 76, flush=True)
+    print("\n" + "=" * 76, flush=True)
     print(f"⚡ {stage_title} (待测总数: {len(tasks)} 条, 速度门槛: {min_speed:.1f} KB/s)", flush=True)
     print("=" * 76, flush=True)
 
@@ -1123,15 +603,11 @@ def step4_fission_high_speed_sources(
     already_tested_urls: Set[str],
     target_channels: Set[str]
 ) -> Dict[str, List[str]]:
-    """
-    第四步：智能裂变补齐（严格排除所有在裂变前已经存在或已经测过速的 URL，确保二次测速只测裂变后新出现的地址）
-    """
-    print("\\n" + "=" * 76, flush=True)
+    print("\n" + "=" * 76, flush=True)
     print("🧬 【第四步】央卫视智能裂变补齐 (cctv1hd -> cctv1~17hd / dfwshd -> jxwshd,hnwshd 等)", flush=True)
     print("=" * 76, flush=True)
 
     fission_candidates: Dict[str, List[str]] = {ch: [] for ch in target_channels}
-    # 严格记录裂变前所有已测过速/已清洗过的地址，杜绝二次重复测速
     fission_seen: Set[str] = {clean_stream_url(u).rstrip("/") for u in already_tested_urls if u}
 
     all_high_speed_seeds: List[Tuple[str, str, float, int, int]] = []
@@ -1157,7 +633,6 @@ def step4_fission_high_speed_sources(
             if not clean_u:
                 continue
             norm_u = clean_u.rstrip("/")
-            # 若该地址在裂变前已测过速，或者本轮已生成过，直接跳过
             if norm_u in fission_seen:
                 skipped_already_tested += 1
                 continue
@@ -1191,7 +666,7 @@ def step5_merge_sort_and_export(
     step5_count = sum(len(v) for v in step5_qualified.values())
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    print("\\n" + "=" * 86, flush=True)
+    print("\n" + "=" * 86, flush=True)
     print("🏆 【第五步(2/2)】汇总合并全部达标源，按清晰度优先 (1920x1080 且速度快在前 -> 720x576) 排序输出", flush=True)
     print(f"   - 第三步初次测速达标源 (无需二次测速): {step3_count} 条", flush=True)
     print(f"   - 第五步裂变新源二次测速新增达标源: {step5_count} 条", flush=True)
@@ -1200,12 +675,12 @@ def step5_merge_sort_and_export(
 
     txt_lines: List[str] = [
         "更新时间,#genre#",
-        f"最新更新: {now_str},https://tvzb.github.io/IPTV/live.txt",
+        f"最新更新: {now_str},[https://tvzb.github.io/IPTV/live.txt](https://tvzb.github.io/IPTV/live.txt)",
     ]
     m3u_lines: List[str] = [
-        '#EXTM3U x-tvg-url="https://live.fanmingming.com/e.xml"',
+        '#EXTM3U x-tvg-url="[https://live.fanmingming.com/e.xml](https://live.fanmingming.com/e.xml)"',
         f'#EXTINF:-1 tvg-name="更新时间" group-title="更新时间",最新更新: {now_str}',
-        'https://tvzb.github.io/IPTV/live.m3u',
+        '[https://tvzb.github.io/IPTV/live.m3u](https://tvzb.github.io/IPTV/live.m3u)',
     ]
 
     total_channels_ready = 0
@@ -1256,10 +731,10 @@ def step5_merge_sort_and_export(
             txt_lines.extend(group_txt)
 
     with open(OUTPUT_LIVE_TXT, "w", encoding="utf-8") as f:
-        f.write("\\n".join(txt_lines) + "\\n")
+        f.write("\n".join(txt_lines) + "\n")
 
     with open(OUTPUT_LIVE_M3U, "w", encoding="utf-8") as f:
-        f.write("\\n".join(m3u_lines) + "\\n")
+        f.write("\n".join(m3u_lines) + "\n")
 
     print("=" * 86, flush=True)
     print(f"🎉 五步工作流全部完成！")
@@ -1281,12 +756,12 @@ def save_intermediate_cleaned_pool(
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     txt_lines: List[str] = [
         "更新时间,#genre#",
-        f"待测源归档: {now_str},https://tvzb.github.io/IPTV/raw_sources.txt",
+        f"待测源归档: {now_str},[https://tvzb.github.io/IPTV/raw_sources.txt](https://tvzb.github.io/IPTV/raw_sources.txt)",
     ]
     m3u_lines: List[str] = [
-        '#EXTM3U x-tvg-url="https://live.fanmingming.com/e.xml"',
+        '#EXTM3U x-tvg-url="[https://live.fanmingming.com/e.xml](https://live.fanmingming.com/e.xml)"',
         f'#EXTINF:-1 tvg-name="更新时间" group-title="更新时间",待测源归档: {now_str}',
-        'https://tvzb.github.io/IPTV/raw_sources.m3u',
+        '[https://tvzb.github.io/IPTV/raw_sources.m3u](https://tvzb.github.io/IPTV/raw_sources.m3u)',
     ]
     for group_name, ch_list in user_struct.items():
         group_txt = [f"{group_name},#genre#"]
@@ -1300,9 +775,9 @@ def save_intermediate_cleaned_pool(
             txt_lines.extend(group_txt)
 
     with open(RAW_SOURCES_TXT, "w", encoding="utf-8") as f:
-        f.write("\\n".join(txt_lines) + "\\n")
+        f.write("\n".join(txt_lines) + "\n")
     with open(RAW_SOURCES_M3U, "w", encoding="utf-8") as f:
-        f.write("\\n".join(m3u_lines) + "\\n")
+        f.write("\n".join(m3u_lines) + "\n")
 
 
 def run_standalone_speedtest_mode(input_file: str, min_speed: float = MIN_SPEED_KBS):
@@ -1345,13 +820,13 @@ def run_standalone_speedtest_mode(input_file: str, min_speed: float = MIN_SPEED_
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     out_txt_lines = [
         "更新时间,#genre#",
-        f"测速完成: {now_str},https://tvzb.github.io/IPTV/live.txt",
+        f"测速完成: {now_str},[https://tvzb.github.io/IPTV/live.txt](https://tvzb.github.io/IPTV/live.txt)",
         "测速优选频道,#genre#",
     ]
     out_m3u_lines = [
-        '#EXTM3U x-tvg-url="https://live.fanmingming.com/e.xml"',
+        '#EXTM3U x-tvg-url="[https://live.fanmingming.com/e.xml](https://live.fanmingming.com/e.xml)"',
         f'#EXTINF:-1 tvg-name="更新时间" group-title="更新时间",测速完成: {now_str}',
-        'https://tvzb.github.io/IPTV/live.m3u',
+        '[https://tvzb.github.io/IPTV/live.m3u](https://tvzb.github.io/IPTV/live.m3u)',
     ]
 
     for ch in channel_order:
@@ -1363,9 +838,9 @@ def run_standalone_speedtest_mode(input_file: str, min_speed: float = MIN_SPEED_
             out_m3u_lines.append(url)
 
     with open(OUTPUT_LIVE_TXT, "w", encoding="utf-8") as f:
-        f.write("\\n".join(out_txt_lines) + "\\n")
+        f.write("\n".join(out_txt_lines) + "\n")
     with open(OUTPUT_LIVE_M3U, "w", encoding="utf-8") as f:
-        f.write("\\n".join(out_m3u_lines) + "\\n")
+        f.write("\n".join(out_m3u_lines) + "\n")
 
     print(f"[✓] 在线去重测速完成！结果已写入 {OUTPUT_LIVE_TXT} 与 {OUTPUT_LIVE_M3U}", flush=True)
 
@@ -1382,7 +857,6 @@ def run_five_step_workflow(min_speed: float = MIN_SPEED_KBS):
     cleaned_pool, all_seen_urls = step2_clean_and_deduplicate(raw_records, target_channels)
     save_intermediate_cleaned_pool(cleaned_pool, user_struct, target_channels)
 
-    # 记录所有裂变前已存在的直播源地址（包括第一步提取的所有原始地址 + 第二步待测地址），确保二次测速绝不重复测速
     tested_url_set: Set[str] = set(all_seen_urls)
     for _, raw_u in raw_records:
         cu = clean_stream_url(raw_u)
@@ -1413,7 +887,7 @@ def run_five_step_workflow(min_speed: float = MIN_SPEED_KBS):
     step5_merge_sort_and_export(step3_qualified, step5_qualified, user_struct, norm_to_display, target_channels)
 
     elapsed = time.time() - total_start
-    print(f"\\n[🏁] 全流程执行完毕，总耗时: {elapsed:.1f} 秒", flush=True)
+    print(f"\n[🏁] 全流程执行完毕，总耗时: {elapsed:.1f} 秒", flush=True)
 
 
 def main():
@@ -1434,19 +908,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-'''
-
-with open("config.py", "w", encoding="utf-8") as f:
-    f.write(config_code)
-
-with open("main.py", "w", encoding="utf-8") as f:
-    f.write(main_code)
-
-# Run a quick verification test on the smart fission logic
-from config import extrapolate_channels_from_seed
-
-cctv_test = extrapolate_channels_from_seed("http://198.204.228.26/live/cctv1hd.m3u8", "CCTV-1 综合")
-sat_test = extrapolate_channels_from_seed("http://107.150.60.122/live/dfwshd.m3u8", "东方卫视")
-
-print("CCTV fission count:", len(cctv_test), "Sample:", cctv_test[:3])
-print("SAT fission count:", len(sat_test), "Sample:", sat_test[:3])
