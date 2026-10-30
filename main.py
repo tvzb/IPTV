@@ -140,12 +140,12 @@ def search_github_first_page_with_preview(
                 fragments = [tm.get("fragment", "").strip() for tm in text_matches if tm.get("fragment", "").strip()]
                 combined_preview = "\n".join(fragments)
 
-                # 情况 A：完全没有预览片段，或者预览片段中没有 http/cctv 等直播源特征（排除图三无预览纯链接）
+                # 情况 A：完全没有预览片段，或者预览片段中没有 http/cctv 等直播源特征（排除无预览纯链接）
                 if not combined_preview or ("http" not in combined_preview.lower() and "cctv" not in combined_preview.lower()):
                     print(f"  [跳过 {idx}/{len(items)}] {display_name} -> 纯链接(无展开代码预览)，不打开", flush=True)
                     continue
 
-                # 情况 B：同一个仓库只提取第 1 个最优文件，跳过后续的同仓库重复/历史归档文件 (解决图一 hebijunge 打开多条问题)
+                # 情况 B：同一个仓库只提取第 1 个最优文件，跳过后续的同仓库重复/历史归档文件
                 if repo_name in seen_repos:
                     print(f"  [跳过 {idx}/{len(items)}] {display_name} -> 仓库【{repo_name}】已提取过最优文件，跳过该仓库历史归档", flush=True)
                     continue

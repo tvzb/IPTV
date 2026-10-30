@@ -38,7 +38,7 @@ REQUEST_TIMEOUT = 2.5
 CHUNK_DOWNLOAD_TIMEOUT = 2.0
 CHUNK_DOWNLOAD_MAX_BYTES = 512 * 1024  # 512KB 采样即可完整读取 TS 头与 ffprobe 视频轨
 MAX_WORKERS = 40
-MIN_SPEED_KBS = 200.0  # 默认最低有效速度阈值 (KB/s)
+MIN_SPEED_KBS = 150.0  # 默认最低有效速度阈值 (KB/s) —— 按你的要求改为 150
 MAX_CANDIDATES_PER_CHANNEL = 30  # 每个频道最多候选测速源数（防止测速总量失控）
 MAX_SAME_IP_PER_CHANNEL = 3
 
