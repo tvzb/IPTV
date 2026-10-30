@@ -888,13 +888,12 @@ def step5_merge_sort_and_export(
 
     txt_lines: List[str] = [
         "更新时间,#genre#",
-        f"最新更新: {now_str},{pages_host}/IPTV/live.txt",
+        f"最新更新: {now_str}",
     ]
     epg_host = "https://" + "live.fanmingming.com"
     m3u_lines: List[str] = [
         f'#EXTM3U x-tvg-url="{epg_host}/e.xml"',
         f'#EXTINF:-1 tvg-name="更新时间" group-title="更新时间",最新更新: {now_str}',
-        f'{pages_host}/IPTV/live.m3u',
     ]
 
     total_channels_ready = 0
