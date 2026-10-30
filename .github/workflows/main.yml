@@ -6,7 +6,7 @@ on:
       min_speed:
         description: '最低测速门槛 (KB/s)，默认 200'
         required: false
-        default: '200'
+        default: '150'
       custom_channels_json:
         description: '网页端设置的分类与频道列表 JSON (若为空则采用 config.py 官方定义)'
         required: false
