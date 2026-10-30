@@ -3,16 +3,16 @@
 IPTV 自动化五步工作流引擎 & 独立在线测速脚本 (TVBox 国内 IP 仿真 + 清晰度优先排序版)
 
 核心改进落实：
-  1. 彻底修复 URL Markdown 链接转义及特殊字符编码问题；
-  2. 严格按照图二 -> 图三 -> 图四流程提取：
-     - 搜索首页（图二）：依次扫描 20 条有预览的搜索结果卡片，首先直接提取预览框（图二）中的匹配文本；
-     - 打开文件页面（图三）：依次打开每个结果对应的 GitHub 文件页（html_url，如图三），直接从网页内嵌 JSON 载荷 (`payload.blob.rawLines`) 提取文字框完整内容；
-     - 点击打开 "Raw"（图四）：或通过页面中的 Raw 地址打开纯文本格式直播源列表（图四），双通道 100% 保障提取；
-  3. 首页 20 条有预览结果全部逐个打开提取（不跳过同仓库文件），最大化获取有效直播源；
-  4. 智能裂变精准对齐：
+  1. 彻底解决 REST API (`/search/code`) 单仓库刷屏 12 条历史文件的问题：
+     - 网页端 GitHub 搜索（图一/图二）默认按仓库折叠去重，因此首页 20 条结果来自 20 个不同的仓库（如 hebijunge/tvbox-config 只有 1 条、iptvjs/iptv-api 1 条、0610840119/iptv-api-broken 1 条...）；
+     - 而旧版调用的 `api.github.com/search/code` (per_page=20) 不会按仓库折叠，导致 `hebijunge/tvbox-config` 一个仓库的 12 个历史日期归档文件霸占了前 12 个名额，挤掉了其它 11 个不同仓库的搜索结果！
+     - 现已改为：优先直接请求 GitHub 网页端搜索接口获取与图一 100% 一致的 20 条预览框结果；若走 API 通道，则单次拉取 100 条并按每仓库只取 1 条最新结果凑齐 20 个不同仓库的预览框，绝不让单个仓库刷屏浪费名额！
+  2. 严格执行【打开搜索结果预览框 -> 点击 Raw 打开纯文本直播源列表 -> 采集全部直播源】：
+     - 从第 1 条结果到最后一条结果（20/20），依次打开预览框进入文件页，再通过 Raw 直链打开纯文本直播源列表采集全部地址。
+  3. 智能裂变精准对齐：
      - 央视频道（如 cctv1hd.m3u8 -> cctv1hd.m3u8 ~ cctv17hd.m3u8 裂变全部 17 个央视）；
      - 卫视频道（如 dfwshd.m3u8 -> jxwshd.m3u8、hnwshd.m3u8 等裂变全部 30 个卫视，保留 hd/sd 等画质尾缀）；
-  5. 二次测速严格去重：只对第四步裂变后【新出现】的直播源地址进行测速，裂变前已测过速的地址绝不重复测速。
+  4. 二次测速严格去重：只对第四步裂变后【新出现】的直播源地址进行测速，裂变前已测过速的地址绝不重复测速。
 """
 import argparse
 import datetime
@@ -134,8 +134,8 @@ def get_github_web_headers() -> Dict[str, str]:
 def build_blob_and_raw_urls(item: dict) -> Tuple[str, str]:
     """
     从搜索结果卡片构造：
-      1. 图三对应的文件预览页地址 (blob_html_url)
-      2. 图四点击 "Raw" 按钮对应的纯文本地址 (raw_url)
+      1. 预览框点开后的文件页面地址 (blob_html_url)
+      2. 再次点击 "Raw" 按钮对应的纯文本直播源列表地址 (raw_url)
     """
     html_url = sanitize_url(item.get("html_url", ""))
     repo_full_name = item.get("repository", {}).get("full_name", "")
@@ -153,28 +153,36 @@ def build_blob_and_raw_urls(item: dict) -> Tuple[str, str]:
     return html_url, raw_url
 
 
-def fetch_github_blob_or_raw_text(blob_html_url: str, raw_url: str) -> Tuple[str, str]:
+def open_preview_and_click_raw(blob_html_url: str, raw_url: str) -> Tuple[str, str]:
     """
-    严格按照用户指定的【图三 -> 图四】方式获取直播源列表：
-      方式 A（图三）：打开搜索结果的预览链接 (blob_html_url)，提取图三文字框内容（GitHub 页面内嵌的 payload.blob.rawLines）；
-      方式 B（图四）：点开图三右上角的 "Raw" 按钮（即访问 ?raw=1 或 raw_url），读取图四纯文本格式直播源列表。
-    返回: (文本内容, 提取方式说明)
+    严格按照用户指定的两步动作采集：
+      动作 1：打开搜索结果中的预览框（访问文件页面 blob_html_url）；
+      动作 2：打开后再次点击 "Raw" 按钮打开纯文本直播源列表（即 ?raw=1 或 raw.githubusercontent.com 直链），读取全部纯文本内容。
+    返回: (纯文本直播源内容, 采集通道名称)
     """
     blob_html_url = sanitize_url(blob_html_url)
     raw_url = sanitize_url(raw_url)
 
     raw_candidates = []
     if blob_html_url:
-        raw_candidates.append((f"{blob_html_url}?raw=1", "图四 Raw 按钮直链 (?raw=1)"))
+        raw_candidates.append((f"{blob_html_url}?raw=1", "点击 Raw 打开纯文本列表 (?raw=1)"))
         if "/blob/" in blob_html_url:
-            raw_btn_url = blob_html_url.replace("/blob/", "/raw/")
-            raw_candidates.append((raw_btn_url, "图四 Raw 按钮路径 (/raw/)"))
+            raw_candidates.append((blob_html_url.replace("/blob/", "/raw/"), "点击 Raw 打开纯文本列表 (/raw/)"))
     if raw_url:
-        raw_candidates.append((raw_url, "图四 Raw 纯文本页"))
+        raw_candidates.append((raw_url, "Raw 纯文本直链"))
         if "/main/" in raw_url:
-            raw_candidates.append((raw_url.replace("/main/", "/master/"), "图四 Raw 纯文本页 (master)"))
+            raw_candidates.append((raw_url.replace("/main/", "/master/"), "Raw 纯文本直链 (master)"))
 
-    # 1. 打开图三文件页提取文字框内容
+    for candidate_u, desc in raw_candidates:
+        try:
+            r_raw = requests.get(candidate_u, headers=HEADERS, timeout=12, allow_redirects=True)
+            if r_raw.status_code == 200 and r_raw.text:
+                head_sample = r_raw.text[:300].lower()
+                if "<!doctype html" not in head_sample and "<html" not in head_sample:
+                    return r_raw.text, desc
+        except Exception:
+            continue
+
     if blob_html_url:
         try:
             r_blob = requests.get(blob_html_url, headers=get_github_web_headers(), timeout=10)
@@ -187,7 +195,7 @@ def fetch_github_blob_or_raw_text(blob_html_url: str, raw_url: str) -> Tuple[str
                         or data.get("blob", {}).get("rawLines")
                     )
                     if isinstance(raw_lines, list) and len(raw_lines) > 0:
-                        return "\n".join(raw_lines), "图三文字框 (payload.blob.rawLines)"
+                        return "\n".join(raw_lines), "文件页文字框纯文本 (rawLines)"
                 except Exception:
                     pass
 
@@ -201,88 +209,39 @@ def fetch_github_blob_or_raw_text(blob_html_url: str, raw_url: str) -> Tuple[str
                         embedded_json = json.loads(m_script.group(1).strip())
                         raw_lines = embedded_json.get("payload", {}).get("blob", {}).get("rawLines")
                         if isinstance(raw_lines, list) and len(raw_lines) > 0:
-                            return "\n".join(raw_lines), "图三页面文字框内嵌数据"
+                            return "\n".join(raw_lines), "文件页文字框内嵌数据"
                     except Exception:
                         pass
         except Exception:
             pass
 
-    # 2. 点开图三右上角 "Raw" 按钮，直接读取图四纯文本格式直播源列表
-    for candidate_u, desc in raw_candidates:
-        try:
-            r_raw = requests.get(candidate_u, headers=HEADERS, timeout=10, allow_redirects=True)
-            if r_raw.status_code == 200 and r_raw.text:
-                head_sample = r_raw.text[:300].lower()
-                if "<!doctype html" not in head_sample and "<html" not in head_sample:
-                    return r_raw.text, desc
-        except Exception:
-            continue
-
     return "", "未能读取"
 
 
-def search_github_first_page_with_preview(
+def search_github_20_distinct_previews(
     query: str,
-    per_page: int = 20
+    target_count: int = 20
 ) -> List[Tuple[str, str, str, str]]:
     """
-    搜索 GitHub 首页前 20 条结果（对应图二）：
-    返回列表项: (显示名称, 图三文件页URL, 图四Raw页URL, 图二预览框匹配文本)
+    获取与 GitHub 网页端搜索首页（图一/图二）完全一致的 20 条预览框结果：
+      - 同一个仓库（如 hebijunge/tvbox-config）自动折叠，只保留排序最靠前、日期最新的那 1 条预览框；
+      - 单次从 API 拉取 100 条候选（必要时翻页），跳过同仓库冗余历史归档后，实打实地拿满 20 个不同仓库的预览结果！
     """
     valid_results: List[Tuple[str, str, str, str]] = []
-    seen_targets: Set[str] = set()
+    seen_repos: Set[str] = set()
+    seen_urls: Set[str] = set()
 
-    clean_q = query.replace(",", " ")
-    query_variants = [query, clean_q]
-
-    for q_try in query_variants:
-        api_url = sanitize_url(f"{GH_API_HOST}/search/code")
-        params = {
-            "q": q_try,
-            "per_page": str(per_page),
-            "page": "1",
-        }
-        try:
-            resp = requests.get(api_url, headers=get_github_search_headers(), params=params, timeout=12)
-            if resp.status_code == 200:
-                items = resp.json().get("items", [])
-                if not items:
-                    continue
-                print(f"  [*] GitHub 首页返回结果数: {len(items)} 条 (对应图二预览框列表，逐个点击打开)", flush=True)
-                for idx, item in enumerate(items, 1):
-                    repo_name = item.get("repository", {}).get("full_name", "")
-                    file_path = item.get("path", "")
-                    display_name = f"{repo_name} · {file_path}"
-
-                    text_matches = item.get("text_matches", [])
-                    fragments = [tm.get("fragment", "").strip() for tm in text_matches if tm.get("fragment", "").strip()]
-                    combined_preview = "\n".join(fragments)
-
-                    blob_html_url, raw_url = build_blob_and_raw_urls(item)
-                    unique_key = raw_url or blob_html_url
-                    if unique_key and unique_key not in seen_targets:
-                        seen_targets.add(unique_key)
-                        valid_results.append((display_name, blob_html_url, raw_url, combined_preview))
-                if valid_results:
-                    return valid_results
-            elif resp.status_code in (403, 429):
-                print(f"  [!] GitHub Search API 触发限流 ({resp.status_code})，切换网页端搜索通道...", flush=True)
-            else:
-                print(f"  [!] GitHub API 搜索状态码: {resp.status_code} (尝试切换查询词或网页端搜索)", flush=True)
-        except Exception as e:
-            print(f"  [!] API 搜索请求异常 ({q_try}): {e}", flush=True)
-
-    # 备用通道：直接请求 GitHub 网页端搜索 JSON 接口
+    # 通道 A：优先尝试直接读取 GitHub 网页端搜索接口结果
     try:
         web_search_url = sanitize_url(f"{GH_HOST}/search")
         params = {"q": query, "type": "code", "p": "1"}
-        r_web = requests.get(web_search_url, headers=get_github_web_headers(), params=params, timeout=12)
+        r_web = requests.get(web_search_url, headers=get_github_web_headers(), params=params, timeout=10)
         if r_web.status_code == 200:
+            results = []
             try:
                 web_data = r_web.json()
                 results = web_data.get("payload", {}).get("results", [])
             except Exception:
-                results = []
                 m_emb = re.search(
                     r'<script[^>]*data-target="react-app\.embeddedData"[^>]*>(.*?)</script>',
                     r_web.text,
@@ -295,23 +254,102 @@ def search_github_first_page_with_preview(
                         results = []
 
             if results:
-                print(f"  [*] 网页端搜索返回首页结果数: {len(results)} 条", flush=True)
-                for item in results[:per_page]:
+                for item in results:
                     repo_name = item.get("repo_nwo", "") or item.get("repository", {}).get("full_name", "")
                     file_path = item.get("path", "")
                     commit_sha = item.get("commit_sha", "main")
-                    if repo_name and file_path:
-                        display_name = f"{repo_name} · {file_path}"
-                        blob_html_url = f"{GH_HOST}/{repo_name}/blob/{commit_sha}/{file_path}"
-                        raw_url = f"{GH_RAW_HOST}/{repo_name}/{commit_sha}/{file_path}"
-                        snippets = item.get("hl_trunc_description", "") or ""
-                        clean_snip = re.sub(r'<[^>]+>', '', snippets)
-                        if raw_url not in seen_targets:
-                            seen_targets.add(raw_url)
-                            valid_results.append((display_name, blob_html_url, raw_url, clean_snip))
-    except Exception as e:
-        print(f"  [!] 网页端搜索备用通道异常: {e}", flush=True)
+                    if not repo_name or not file_path:
+                        continue
+                    if repo_name in seen_repos:
+                        continue
+                    seen_repos.add(repo_name)
+                    display_name = f"{repo_name} · {file_path}"
+                    blob_html_url = f"{GH_HOST}/{repo_name}/blob/{commit_sha}/{file_path}"
+                    raw_url = f"{GH_RAW_HOST}/{repo_name}/{commit_sha}/{file_path}"
+                    snippets = item.get("hl_trunc_description", "") or ""
+                    clean_snip = re.sub(r'<[^>]+>', '', snippets).strip()
+                    seen_urls.add(raw_url)
+                    valid_results.append((display_name, blob_html_url, raw_url, clean_snip))
+                    if len(valid_results) >= target_count:
+                        print(f"  [*] 网页端搜索通道成功获取 {len(valid_results)} 条独立仓库预览框结果", flush=True)
+                        return valid_results
+    except Exception:
+        pass
 
+    # 通道 B：通过 GitHub Search API 单页拉取 100 条（必要时拉取第 2 页），每个仓库只取最新 1 条，凑满 20 条不同仓库的预览结果！
+    clean_q = query.replace(",", " ")
+    query_variants = [query, clean_q]
+
+    for q_try in query_variants:
+        api_url = sanitize_url(f"{GH_API_HOST}/search/code")
+        for page_num in (1, 2):
+            params = {
+                "q": q_try,
+                "per_page": "100",
+                "page": str(page_num),
+            }
+            try:
+                resp = requests.get(api_url, headers=get_github_search_headers(), params=params, timeout=14)
+                if resp.status_code == 200:
+                    items = resp.json().get("items", [])
+                    if not items:
+                        break
+
+                    repo_best_item: Dict[str, dict] = {}
+                    repo_order: List[str] = []
+                    for item in items:
+                        repo_name = item.get("repository", {}).get("full_name", "")
+                        file_path = item.get("path", "")
+                        if not repo_name or not file_path:
+                            continue
+                        if repo_name not in repo_best_item:
+                            repo_best_item[repo_name] = item
+                            repo_order.append(repo_name)
+                        else:
+                            old_path = repo_best_item[repo_name].get("path", "")
+                            m_new = re.search(r'(\d{4}-\d{2}-\d{2})', file_path)
+                            m_old = re.search(r'(\d{4}-\d{2}-\d{2})', old_path)
+                            if m_new and m_old and m_new.group(1) > m_old.group(1):
+                                repo_best_item[repo_name] = item
+
+                    for repo_name in repo_order:
+                        if repo_name in seen_repos:
+                            continue
+                        item = repo_best_item[repo_name]
+                        file_path = item.get("path", "")
+                        display_name = f"{repo_name} · {file_path}"
+
+                        text_matches = item.get("text_matches", [])
+                        fragments = [tm.get("fragment", "").strip() for tm in text_matches if tm.get("fragment", "").strip()]
+                        combined_preview = "\n".join(fragments)
+
+                        blob_html_url, raw_url = build_blob_and_raw_urls(item)
+                        unique_key = raw_url or blob_html_url
+                        if unique_key and unique_key not in seen_urls:
+                            seen_repos.add(repo_name)
+                            seen_urls.add(unique_key)
+                            valid_results.append((display_name, blob_html_url, raw_url, combined_preview))
+                            if len(valid_results) >= target_count:
+                                break
+
+                    if len(valid_results) >= target_count or len(items) < 100:
+                        break
+                elif resp.status_code in (403, 429):
+                    print(f"  [!] GitHub Search API 触发限流 ({resp.status_code})", flush=True)
+                    break
+                else:
+                    break
+            except Exception as e:
+                print(f"  [!] 搜索请求异常 ({q_try}): {e}", flush=True)
+                break
+
+        if valid_results:
+            break
+
+    print(
+        f"  [*] 搜索完成：已对同仓库历史归档去重折叠，共获取 {len(valid_results)} 条独立预览框结果（每条均来自不同仓库，无重复霸屏）",
+        flush=True
+    )
     return valid_results
 
 
@@ -352,9 +390,9 @@ def extract_raw_entries_from_text(content: str) -> List[Tuple[str, str]]:
 
 def step1_search_and_extract(target_channels: Set[str]) -> List[Tuple[str, str]]:
     curr_month = get_current_month_str()
-    print("=" * 78, flush=True)
-    print(f"🚀 【第一步】搜索 GitHub 首页 -> 点击图二预览框 -> 提取图三文字框 / 图四 Raw 纯文本列表 (目标月份: {curr_month})", flush=True)
-    print("=" * 78, flush=True)
+    print("=" * 82, flush=True)
+    print(f"🚀 【第一步】搜索 GitHub 首页 20 条独立预览框 -> 打开预览框 -> 点击 Raw 采集全部直播源 (月份: {curr_month})", flush=True)
+    print("=" * 82, flush=True)
 
     exact_queries = [
         f"更新 {curr_month} CCTV-6,http",
@@ -365,32 +403,28 @@ def step1_search_and_extract(target_channels: Set[str]) -> List[Tuple[str, str]]
     visited_files: Set[str] = set()
 
     for q in exact_queries:
-        print(f"\n[*] 正在搜索首页关键词: 「{q}」 (依次点击图二预览框 -> 打开图三/图四 Raw 提取全量直播源)...", flush=True)
-        search_items = search_github_first_page_with_preview(q, per_page=20)
+        print(f"\n[*] 正在搜索关键词: 「{q}」 (同仓库自动折叠只取 1 条最新结果，确保 20 条名额全部来自不同仓库)...", flush=True)
+        search_items = search_github_20_distinct_previews(q, target_count=20)
         if not search_items:
             print(f"  [-] 未获取到「{q}」的搜索结果。", flush=True)
             continue
 
+        total_items = len(search_items)
         for idx, (display_name, blob_html_url, raw_url, preview_text) in enumerate(search_items, 1):
             unique_key = raw_url or blob_html_url
             if unique_key in visited_files:
-                print(f"  -> [{idx}/{len(search_items)}] 已提取过该文件，跳过重复项: {display_name}", flush=True)
+                print(f"  -> [{idx}/{total_items}] 已在上一轮采集过该文件，跳过重复项: {display_name}", flush=True)
                 continue
             visited_files.add(unique_key)
 
             preview_first_line = preview_text.splitlines()[0][:65] if preview_text else ""
-            print(f"  -> [{idx}/{len(search_items)}] 点击打开预览结果: {display_name}", flush=True)
+            print(f"  -> [{idx}/{total_items}] 打开预览框: {display_name}", flush=True)
             if preview_first_line:
-                print(f"     [图二预览框片段] {preview_first_line}...", flush=True)
+                print(f"     [预览框内容] {preview_first_line}...", flush=True)
 
+            # 打开预览框后，点击 Raw 打开纯文本直播源列表，采集里面的全部直播源
+            full_text, source_mode = open_preview_and_click_raw(blob_html_url, raw_url)
             matched_in_file = 0
-            if preview_text:
-                for raw_ch, raw_url_str in extract_raw_entries_from_text(preview_text):
-                    norm_ch = normalize_channel_name(raw_ch, target_channels)
-                    if norm_ch in target_channels:
-                        raw_extracted_records.append((norm_ch, raw_url_str))
-
-            full_text, source_mode = fetch_github_blob_or_raw_text(blob_html_url, raw_url)
             if full_text:
                 entries = extract_raw_entries_from_text(full_text)
                 for raw_ch, raw_url_str in entries:
@@ -398,16 +432,21 @@ def step1_search_and_extract(target_channels: Set[str]) -> List[Tuple[str, str]]
                     if norm_ch in target_channels:
                         raw_extracted_records.append((norm_ch, raw_url_str))
                         matched_in_file += 1
-                print(f"     [✓] 通过【{source_mode}】成功提取目标频道记录: {matched_in_file} 条", flush=True)
-            else:
-                print(f"     [!] 未能打开完整文件页，仅保留图二预览框片段记录", flush=True)
+                print(f"     [✓] {source_mode} -> 成功采集目标频道直播源: {matched_in_file} 条", flush=True)
+            elif preview_text:
+                for raw_ch, raw_url_str in extract_raw_entries_from_text(preview_text):
+                    norm_ch = normalize_channel_name(raw_ch, target_channels)
+                    if norm_ch in target_channels:
+                        raw_extracted_records.append((norm_ch, raw_url_str))
+                        matched_in_file += 1
+                print(f"     [!] Raw 页面响应超时，已从预览框采集目标频道直播源: {matched_in_file} 条", flush=True)
 
         time.sleep(1.0)
 
     print("\n[*] 正在同步国内高活性直播源 Raw 补充矩阵...", flush=True)
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         future_map = {
-            executor.submit(fetch_github_blob_or_raw_text, "", sanitize_url(u)): sanitize_url(u)
+            executor.submit(open_preview_and_click_raw, "", sanitize_url(u)): sanitize_url(u)
             for u in FALLBACK_GITHUB_MATRIX
             if sanitize_url(u) not in visited_files
         }
@@ -419,7 +458,7 @@ def step1_search_and_extract(target_channels: Set[str]) -> List[Tuple[str, str]]
                     if norm_ch in target_channels:
                         raw_extracted_records.append((norm_ch, raw_url_str))
 
-    print(f"\n[✓] 第一步完成：共点击打开 {len(visited_files)} 个搜索结果文件，提取到符合目标频道的原始记录 {len(raw_extracted_records)} 条。", flush=True)
+    print(f"\n[✓] 第一步完成：共依次打开 {len(visited_files)} 个不同仓库的 Raw 纯文本列表，合计采集到原始直播源 {len(raw_extracted_records)} 条。", flush=True)
     return raw_extracted_records
 
 
