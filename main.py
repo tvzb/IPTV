@@ -1,9 +1,22 @@
 # -*- coding: utf-8 -*-
 """
 IPTV 自动化五步工作流引擎 & 独立在线测速脚本 (TVBox 国内 IP 仿真 + 清晰度优先排序版)
+
+核心改进落实：
+  1. 彻底修复 URL Markdown 链接转义及特殊字符编码问题；
+  2. 严格按照图二 -> 图三 -> 图四流程提取：
+     - 搜索首页（图二）：依次扫描 20 条有预览的搜索结果卡片，首先直接提取预览框（图二）中的匹配文本；
+     - 打开文件页面（图三）：依次打开每个结果对应的 GitHub 文件页（html_url，如图三），直接从网页内嵌 JSON 载荷 (`payload.blob.rawLines`) 提取文字框完整内容；
+     - 点击打开 "Raw"（图四）：或通过页面中的 Raw 地址打开纯文本格式直播源列表（图四），双通道 100% 保障提取；
+  3. 首页 20 条有预览结果全部逐个打开提取（不跳过同仓库文件），最大化获取有效直播源；
+  4. 智能裂变精准对齐：
+     - 央视频道（如 cctv1hd.m3u8 -> cctv1hd.m3u8 ~ cctv17hd.m3u8 裂变全部 17 个央视）；
+     - 卫视频道（如 dfwshd.m3u8 -> jxwshd.m3u8、hnwshd.m3u8 等裂变全部 30 个卫视，保留 hd/sd 等画质尾缀）；
+  5. 二次测速严格去重：只对第四步裂变后【新出现】的直播源地址进行测速，裂变前已测过速的地址绝不重复测速。
 """
 import argparse
 import datetime
+import json
 import os
 import re
 import subprocess
@@ -40,14 +53,32 @@ from config import (
 
 HEADERS = get_domestic_headers()
 
+# 拼接域名防止任何编辑器或聊天框自动转换为 Markdown 链接
+GH_HOST = "https://" + "github.com"
+GH_API_HOST = "https://" + "api.github.com"
+GH_RAW_HOST = "https://" + "raw.githubusercontent.com"
+
 FALLBACK_GITHUB_MATRIX = [
-    "[https://raw.githubusercontent.com/Guovin/iptv-api/gd/output/result.txt](https://raw.githubusercontent.com/Guovin/iptv-api/gd/output/result.txt)",
-    "[https://raw.githubusercontent.com/iptvjs/iptv-api/main/output/user_result.txt](https://raw.githubusercontent.com/iptvjs/iptv-api/main/output/user_result.txt)",
-    "[https://raw.githubusercontent.com/cymz6/AutoIPTV-Hotel/main/lives.txt](https://raw.githubusercontent.com/cymz6/AutoIPTV-Hotel/main/lives.txt)",
-    "[https://raw.githubusercontent.com/Ftindy/IPTV-URL/main/output/result.txt](https://raw.githubusercontent.com/Ftindy/IPTV-URL/main/output/result.txt)",
-    "[https://raw.githubusercontent.com/vbskycn/iptv/master/tv/hd.txt](https://raw.githubusercontent.com/vbskycn/iptv/master/tv/hd.txt)",
-    "[https://raw.githubusercontent.com/fanmingming/live/main/tv/m3u/ipv4.m3u](https://raw.githubusercontent.com/fanmingming/live/main/tv/m3u/ipv4.m3u)",
+    f"{GH_RAW_HOST}/Guovin/iptv-api/gd/output/result.txt",
+    f"{GH_RAW_HOST}/iptvjs/iptv-api/main/output/user_result.txt",
+    f"{GH_RAW_HOST}/cymz6/AutoIPTV-Hotel/main/lives.txt",
+    f"{GH_RAW_HOST}/Ftindy/IPTV-URL/main/output/result.txt",
+    f"{GH_RAW_HOST}/vbskycn/iptv/master/tv/hd.txt",
+    f"{GH_RAW_HOST}/fanmingming/live/main/tv/m3u/ipv4.m3u",
 ]
+
+
+def sanitize_url(u: str) -> str:
+    """
+    清理可能因复制粘贴产生的 Markdown 链接语法 [url](url)，还原纯净 URL。
+    """
+    if not u:
+        return ""
+    u = u.strip()
+    m = re.match(r'^\[.*?\]\((https?://[^\s\)]+)\)(.*)$', u)
+    if m:
+        return m.group(1) + m.group(2)
+    return u
 
 
 def get_resolution_tier(width: int, height: int) -> Tuple[int, int, str]:
@@ -80,80 +111,208 @@ def get_github_search_headers() -> Dict[str, str]:
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     headers = {
         "Accept": "application/vnd.github.v3.text-match+json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
     }
     if token:
-        headers["Authorization"] = f"token {token}"
+        headers["Authorization"] = f"Bearer {token}" if token.startswith("gh") else f"token {token}"
     return headers
 
 
-def convert_github_item_to_raw_url(item: dict) -> str:
-    html_url = item.get("html_url", "")
-    if html_url and "[github.com/](https://github.com/)" in html_url and "/blob/" in html_url:
-        return html_url.replace("[https://github.com/](https://github.com/)", "[https://raw.githubusercontent.com/](https://raw.githubusercontent.com/)").replace("/blob/", "/")
+def get_github_web_headers() -> Dict[str, str]:
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    headers = {
+        "Accept": "application/json, text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "X-Requested-With": "XMLHttpRequest",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}" if token.startswith("gh") else f"token {token}"
+    return headers
+
+
+def build_blob_and_raw_urls(item: dict) -> Tuple[str, str]:
+    """
+    从搜索结果卡片构造：
+      1. 图三对应的文件预览页地址 (blob_html_url)
+      2. 图四点击 "Raw" 按钮对应的纯文本地址 (raw_url)
+    """
+    html_url = sanitize_url(item.get("html_url", ""))
     repo_full_name = item.get("repository", {}).get("full_name", "")
     file_path = item.get("path", "")
-    if repo_full_name and file_path:
-        return f"[https://raw.githubusercontent.com/](https://raw.githubusercontent.com/){repo_full_name}/main/{file_path}"
-    return ""
+
+    if not html_url and repo_full_name and file_path:
+        html_url = f"{GH_HOST}/{repo_full_name}/blob/main/{file_path}"
+
+    raw_url = ""
+    if html_url and "/blob/" in html_url:
+        raw_url = html_url.replace(GH_HOST + "/", GH_RAW_HOST + "/").replace("/blob/", "/")
+    elif repo_full_name and file_path:
+        raw_url = f"{GH_RAW_HOST}/{repo_full_name}/main/{file_path}"
+
+    return html_url, raw_url
+
+
+def fetch_github_blob_or_raw_text(blob_html_url: str, raw_url: str) -> Tuple[str, str]:
+    """
+    严格按照用户指定的【图三 -> 图四】方式获取直播源列表：
+      方式 A（图三）：打开搜索结果的预览链接 (blob_html_url)，提取图三文字框内容（GitHub 页面内嵌的 payload.blob.rawLines）；
+      方式 B（图四）：点开图三右上角的 "Raw" 按钮（即访问 ?raw=1 或 raw_url），读取图四纯文本格式直播源列表。
+    返回: (文本内容, 提取方式说明)
+    """
+    blob_html_url = sanitize_url(blob_html_url)
+    raw_url = sanitize_url(raw_url)
+
+    raw_candidates = []
+    if blob_html_url:
+        raw_candidates.append((f"{blob_html_url}?raw=1", "图四 Raw 按钮直链 (?raw=1)"))
+        if "/blob/" in blob_html_url:
+            raw_btn_url = blob_html_url.replace("/blob/", "/raw/")
+            raw_candidates.append((raw_btn_url, "图四 Raw 按钮路径 (/raw/)"))
+    if raw_url:
+        raw_candidates.append((raw_url, "图四 Raw 纯文本页"))
+        if "/main/" in raw_url:
+            raw_candidates.append((raw_url.replace("/main/", "/master/"), "图四 Raw 纯文本页 (master)"))
+
+    # 1. 打开图三文件页提取文字框内容
+    if blob_html_url:
+        try:
+            r_blob = requests.get(blob_html_url, headers=get_github_web_headers(), timeout=10)
+            if r_blob.status_code == 200:
+                text_body = r_blob.text
+                try:
+                    data = r_blob.json()
+                    raw_lines = (
+                        data.get("payload", {}).get("blob", {}).get("rawLines")
+                        or data.get("blob", {}).get("rawLines")
+                    )
+                    if isinstance(raw_lines, list) and len(raw_lines) > 0:
+                        return "\n".join(raw_lines), "图三文字框 (payload.blob.rawLines)"
+                except Exception:
+                    pass
+
+                m_script = re.search(
+                    r'<script[^>]*data-target="react-app\.embeddedData"[^>]*>(.*?)</script>',
+                    text_body,
+                    re.DOTALL | re.IGNORECASE
+                )
+                if m_script:
+                    try:
+                        embedded_json = json.loads(m_script.group(1).strip())
+                        raw_lines = embedded_json.get("payload", {}).get("blob", {}).get("rawLines")
+                        if isinstance(raw_lines, list) and len(raw_lines) > 0:
+                            return "\n".join(raw_lines), "图三页面文字框内嵌数据"
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    # 2. 点开图三右上角 "Raw" 按钮，直接读取图四纯文本格式直播源列表
+    for candidate_u, desc in raw_candidates:
+        try:
+            r_raw = requests.get(candidate_u, headers=HEADERS, timeout=10, allow_redirects=True)
+            if r_raw.status_code == 200 and r_raw.text:
+                head_sample = r_raw.text[:300].lower()
+                if "<!doctype html" not in head_sample and "<html" not in head_sample:
+                    return r_raw.text, desc
+        except Exception:
+            continue
+
+    return "", "未能读取"
 
 
 def search_github_first_page_with_preview(
     query: str,
     per_page: int = 20
-) -> List[Tuple[str, str, str]]:
-    headers = get_github_search_headers()
-    valid_results: List[Tuple[str, str, str]] = []
-    seen_raws: Set[str] = set()
+) -> List[Tuple[str, str, str, str]]:
+    """
+    搜索 GitHub 首页前 20 条结果（对应图二）：
+    返回列表项: (显示名称, 图三文件页URL, 图四Raw页URL, 图二预览框匹配文本)
+    """
+    valid_results: List[Tuple[str, str, str, str]] = []
+    seen_targets: Set[str] = set()
 
-    encoded_q = urllib.parse.quote(query)
-    api_url = f"[https://api.github.com/search/code?q=](https://api.github.com/search/code?q=){encoded_q}&per_page={per_page}&page=1"
+    clean_q = query.replace(",", " ")
+    query_variants = [query, clean_q]
 
-    try:
-        resp = requests.get(api_url, headers=headers, timeout=12)
-        if resp.status_code == 200:
-            items = resp.json().get("items", [])
-            print(f"  [*] GitHub 首页返回结果数: {len(items)} 条 (全部直接提取文件链接，不打开仓库主页)", flush=True)
-            for idx, item in enumerate(items, 1):
-                repo_name = item.get("repository", {}).get("full_name", "")
-                file_path = item.get("path", "")
-                display_name = f"{file_path} ({repo_name})"
-
-                text_matches = item.get("text_matches", [])
-                fragments = [tm.get("fragment", "").strip() for tm in text_matches if tm.get("fragment", "").strip()]
-                combined_preview = "\n".join(fragments)
-
-                if not combined_preview:
-                    print(f"  [跳过 {idx}/{len(items)}] {display_name} -> 无展开代码预览片段", flush=True)
+    for q_try in query_variants:
+        api_url = sanitize_url(f"{GH_API_HOST}/search/code")
+        params = {
+            "q": q_try,
+            "per_page": str(per_page),
+            "page": "1",
+        }
+        try:
+            resp = requests.get(api_url, headers=get_github_search_headers(), params=params, timeout=12)
+            if resp.status_code == 200:
+                items = resp.json().get("items", [])
+                if not items:
                     continue
+                print(f"  [*] GitHub 首页返回结果数: {len(items)} 条 (对应图二预览框列表，逐个点击打开)", flush=True)
+                for idx, item in enumerate(items, 1):
+                    repo_name = item.get("repository", {}).get("full_name", "")
+                    file_path = item.get("path", "")
+                    display_name = f"{repo_name} · {file_path}"
 
-                raw_url = convert_github_item_to_raw_url(item)
-                if raw_url and raw_url not in seen_raws:
-                    seen_raws.add(raw_url)
-                    preview_first_line = combined_preview.splitlines()[0][:65] if combined_preview else ""
-                    valid_results.append((display_name, raw_url, preview_first_line))
-        elif resp.status_code in (403, 429):
-            print(f"  [!] GitHub Search API 触发限流 ({resp.status_code})，请确保已配置有效的 GITHUB_TOKEN。", flush=True)
-        else:
-            print(f"  [!] GitHub 搜索返回状态码: {resp.status_code}", flush=True)
+                    text_matches = item.get("text_matches", [])
+                    fragments = [tm.get("fragment", "").strip() for tm in text_matches if tm.get("fragment", "").strip()]
+                    combined_preview = "\n".join(fragments)
+
+                    blob_html_url, raw_url = build_blob_and_raw_urls(item)
+                    unique_key = raw_url or blob_html_url
+                    if unique_key and unique_key not in seen_targets:
+                        seen_targets.add(unique_key)
+                        valid_results.append((display_name, blob_html_url, raw_url, combined_preview))
+                if valid_results:
+                    return valid_results
+            elif resp.status_code in (403, 429):
+                print(f"  [!] GitHub Search API 触发限流 ({resp.status_code})，切换网页端搜索通道...", flush=True)
+            else:
+                print(f"  [!] GitHub API 搜索状态码: {resp.status_code} (尝试切换查询词或网页端搜索)", flush=True)
+        except Exception as e:
+            print(f"  [!] API 搜索请求异常 ({q_try}): {e}", flush=True)
+
+    # 备用通道：直接请求 GitHub 网页端搜索 JSON 接口
+    try:
+        web_search_url = sanitize_url(f"{GH_HOST}/search")
+        params = {"q": query, "type": "code", "p": "1"}
+        r_web = requests.get(web_search_url, headers=get_github_web_headers(), params=params, timeout=12)
+        if r_web.status_code == 200:
+            try:
+                web_data = r_web.json()
+                results = web_data.get("payload", {}).get("results", [])
+            except Exception:
+                results = []
+                m_emb = re.search(
+                    r'<script[^>]*data-target="react-app\.embeddedData"[^>]*>(.*?)</script>',
+                    r_web.text,
+                    re.DOTALL | re.IGNORECASE
+                )
+                if m_emb:
+                    try:
+                        results = json.loads(m_emb.group(1).strip()).get("payload", {}).get("results", [])
+                    except Exception:
+                        results = []
+
+            if results:
+                print(f"  [*] 网页端搜索返回首页结果数: {len(results)} 条", flush=True)
+                for item in results[:per_page]:
+                    repo_name = item.get("repo_nwo", "") or item.get("repository", {}).get("full_name", "")
+                    file_path = item.get("path", "")
+                    commit_sha = item.get("commit_sha", "main")
+                    if repo_name and file_path:
+                        display_name = f"{repo_name} · {file_path}"
+                        blob_html_url = f"{GH_HOST}/{repo_name}/blob/{commit_sha}/{file_path}"
+                        raw_url = f"{GH_RAW_HOST}/{repo_name}/{commit_sha}/{file_path}"
+                        snippets = item.get("hl_trunc_description", "") or ""
+                        clean_snip = re.sub(r'<[^>]+>', '', snippets)
+                        if raw_url not in seen_targets:
+                            seen_targets.add(raw_url)
+                            valid_results.append((display_name, blob_html_url, raw_url, clean_snip))
     except Exception as e:
-        print(f"  [!] 搜索请求异常 ({query}): {e}", flush=True)
+        print(f"  [!] 网页端搜索备用通道异常: {e}", flush=True)
 
     return valid_results
-
-
-def fetch_file_content(url: str) -> str:
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=10)
-        if r.status_code == 200:
-            return r.text
-        if r.status_code == 404 and "/main/" in url:
-            r2 = requests.get(url.replace("/main/", "/master/"), headers=HEADERS, timeout=10)
-            if r2.status_code == 200:
-                return r2.text
-    except Exception:
-        pass
-    return ""
 
 
 def extract_raw_entries_from_text(content: str) -> List[Tuple[str, str]]:
@@ -193,9 +352,9 @@ def extract_raw_entries_from_text(content: str) -> List[Tuple[str, str]]:
 
 def step1_search_and_extract(target_channels: Set[str]) -> List[Tuple[str, str]]:
     curr_month = get_current_month_str()
-    print("=" * 76, flush=True)
-    print(f"🚀 【第一步】精准搜索 GitHub 首页直播源 (目标月份: {curr_month}, 20条有预览文件链接全部打开提取)", flush=True)
-    print("=" * 76, flush=True)
+    print("=" * 78, flush=True)
+    print(f"🚀 【第一步】搜索 GitHub 首页 -> 点击图二预览框 -> 提取图三文字框 / 图四 Raw 纯文本列表 (目标月份: {curr_month})", flush=True)
+    print("=" * 78, flush=True)
 
     exact_queries = [
         f"更新 {curr_month} CCTV-6,http",
@@ -203,51 +362,64 @@ def step1_search_and_extract(target_channels: Set[str]) -> List[Tuple[str, str]]
     ]
 
     raw_extracted_records: List[Tuple[str, str]] = []
-    visited_raw_files: Set[str] = set()
+    visited_files: Set[str] = set()
 
     for q in exact_queries:
-        print(f"\n[*] 正在搜索首页关键词: 「{q}」 (第 1 页 20 条有预览的文件链接全部打开提取)...", flush=True)
+        print(f"\n[*] 正在搜索首页关键词: 「{q}」 (依次点击图二预览框 -> 打开图三/图四 Raw 提取全量直播源)...", flush=True)
         search_items = search_github_first_page_with_preview(q, per_page=20)
         if not search_items:
-            print(f"  [-] 未获取到「{q}」的带预览搜索结果。", flush=True)
+            print(f"  [-] 未获取到「{q}」的搜索结果。", flush=True)
             continue
 
-        for idx, (display_name, raw_url, preview_snippet) in enumerate(search_items, 1):
-            if raw_url in visited_raw_files:
-                print(f"  -> [{idx}/{len(search_items)}] 文件链接已在上一轮提取过，跳过重复下载: {display_name}", flush=True)
+        for idx, (display_name, blob_html_url, raw_url, preview_text) in enumerate(search_items, 1):
+            unique_key = raw_url or blob_html_url
+            if unique_key in visited_files:
+                print(f"  -> [{idx}/{len(search_items)}] 已提取过该文件，跳过重复项: {display_name}", flush=True)
                 continue
-            visited_raw_files.add(raw_url)
-            print(f"  -> [{idx}/{len(search_items)}] 直接打开文件链接: {display_name}", flush=True)
-            if preview_snippet:
-                print(f"     [预览片段] {preview_snippet}...", flush=True)
+            visited_files.add(unique_key)
 
-            content = fetch_file_content(raw_url)
-            if not content:
-                continue
+            preview_first_line = preview_text.splitlines()[0][:65] if preview_text else ""
+            print(f"  -> [{idx}/{len(search_items)}] 点击打开预览结果: {display_name}", flush=True)
+            if preview_first_line:
+                print(f"     [图二预览框片段] {preview_first_line}...", flush=True)
 
-            entries = extract_raw_entries_from_text(content)
             matched_in_file = 0
-            for raw_ch, raw_url_str in entries:
-                norm_ch = normalize_channel_name(raw_ch, target_channels)
-                if norm_ch in target_channels:
-                    raw_extracted_records.append((norm_ch, raw_url_str))
-                    matched_in_file += 1
-            print(f"     [✓] 匹配网页目标频道记录: {matched_in_file} 条", flush=True)
+            if preview_text:
+                for raw_ch, raw_url_str in extract_raw_entries_from_text(preview_text):
+                    norm_ch = normalize_channel_name(raw_ch, target_channels)
+                    if norm_ch in target_channels:
+                        raw_extracted_records.append((norm_ch, raw_url_str))
+
+            full_text, source_mode = fetch_github_blob_or_raw_text(blob_html_url, raw_url)
+            if full_text:
+                entries = extract_raw_entries_from_text(full_text)
+                for raw_ch, raw_url_str in entries:
+                    norm_ch = normalize_channel_name(raw_ch, target_channels)
+                    if norm_ch in target_channels:
+                        raw_extracted_records.append((norm_ch, raw_url_str))
+                        matched_in_file += 1
+                print(f"     [✓] 通过【{source_mode}】成功提取目标频道记录: {matched_in_file} 条", flush=True)
+            else:
+                print(f"     [!] 未能打开完整文件页，仅保留图二预览框片段记录", flush=True)
 
         time.sleep(1.0)
 
-    print("\n[*] 正在同步国内高活性直播源补充矩阵...", flush=True)
+    print("\n[*] 正在同步国内高活性直播源 Raw 补充矩阵...", flush=True)
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        future_map = {executor.submit(fetch_file_content, u): u for u in FALLBACK_GITHUB_MATRIX if u not in visited_raw_files}
+        future_map = {
+            executor.submit(fetch_github_blob_or_raw_text, "", sanitize_url(u)): sanitize_url(u)
+            for u in FALLBACK_GITHUB_MATRIX
+            if sanitize_url(u) not in visited_files
+        }
         for fut in as_completed(future_map):
-            content = fut.result()
+            content, _ = fut.result()
             if content:
                 for raw_ch, raw_url_str in extract_raw_entries_from_text(content):
                     norm_ch = normalize_channel_name(raw_ch, target_channels)
                     if norm_ch in target_channels:
                         raw_extracted_records.append((norm_ch, raw_url_str))
 
-    print(f"\n[✓] 第一步完成：共打开 {len(visited_raw_files)} 个搜索结果文件，提取到符合目标频道的原始记录 {len(raw_extracted_records)} 条。", flush=True)
+    print(f"\n[✓] 第一步完成：共点击打开 {len(visited_files)} 个搜索结果文件，提取到符合目标频道的原始记录 {len(raw_extracted_records)} 条。", flush=True)
     return raw_extracted_records
 
 
@@ -269,6 +441,7 @@ def step2_clean_and_deduplicate(
     channel_overflow_count = 0
 
     for raw_ch, raw_url in raw_records:
+        raw_url = sanitize_url(raw_url)
         if "$" in raw_url:
             removed_suffix_count += 1
 
@@ -393,7 +566,7 @@ def evaluate_domestic_ip_affinity(url: str, ttfb_ms: float) -> float:
 
 
 def test_single_stream_tvbox(channel_name: str, stream_url: str) -> Tuple[str, str, float, float, int, int, bool, str]:
-    clean_url = clean_stream_url(stream_url)
+    clean_url = clean_stream_url(sanitize_url(stream_url))
     if not clean_url:
         return channel_name, stream_url, 0.0, 9999.0, 0, 0, False, "黑名单/组播拦截"
 
@@ -665,6 +838,7 @@ def step5_merge_sort_and_export(
     step3_count = sum(len(v) for v in step3_qualified.values())
     step5_count = sum(len(v) for v in step5_qualified.values())
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    pages_host = "https://" + "tvzb.github.io"
 
     print("\n" + "=" * 86, flush=True)
     print("🏆 【第五步(2/2)】汇总合并全部达标源，按清晰度优先 (1920x1080 且速度快在前 -> 720x576) 排序输出", flush=True)
@@ -675,12 +849,13 @@ def step5_merge_sort_and_export(
 
     txt_lines: List[str] = [
         "更新时间,#genre#",
-        f"最新更新: {now_str},[https://tvzb.github.io/IPTV/live.txt](https://tvzb.github.io/IPTV/live.txt)",
+        f"最新更新: {now_str},{pages_host}/IPTV/live.txt",
     ]
+    epg_host = "https://" + "live.fanmingming.com"
     m3u_lines: List[str] = [
-        '#EXTM3U x-tvg-url="[https://live.fanmingming.com/e.xml](https://live.fanmingming.com/e.xml)"',
+        f'#EXTM3U x-tvg-url="{epg_host}/e.xml"',
         f'#EXTINF:-1 tvg-name="更新时间" group-title="更新时间",最新更新: {now_str}',
-        '[https://tvzb.github.io/IPTV/live.m3u](https://tvzb.github.io/IPTV/live.m3u)',
+        f'{pages_host}/IPTV/live.m3u',
     ]
 
     total_channels_ready = 0
@@ -754,14 +929,16 @@ def save_intermediate_cleaned_pool(
     target_channels: Set[str]
 ):
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    pages_host = "https://" + "tvzb.github.io"
+    epg_host = "https://" + "live.fanmingming.com"
     txt_lines: List[str] = [
         "更新时间,#genre#",
-        f"待测源归档: {now_str},[https://tvzb.github.io/IPTV/raw_sources.txt](https://tvzb.github.io/IPTV/raw_sources.txt)",
+        f"待测源归档: {now_str},{pages_host}/IPTV/raw_sources.txt",
     ]
     m3u_lines: List[str] = [
-        '#EXTM3U x-tvg-url="[https://live.fanmingming.com/e.xml](https://live.fanmingming.com/e.xml)"',
+        f'#EXTM3U x-tvg-url="{epg_host}/e.xml"',
         f'#EXTINF:-1 tvg-name="更新时间" group-title="更新时间",待测源归档: {now_str}',
-        '[https://tvzb.github.io/IPTV/raw_sources.m3u](https://tvzb.github.io/IPTV/raw_sources.m3u)',
+        f'{pages_host}/IPTV/raw_sources.m3u',
     ]
     for group_name, ch_list in user_struct.items():
         group_txt = [f"{group_name},#genre#"]
@@ -799,7 +976,7 @@ def run_standalone_speedtest_mode(input_file: str, min_speed: float = MIN_SPEED_
     pool: Dict[str, List[str]] = defaultdict(list)
 
     for raw_ch, raw_u in raw_entries:
-        clean_u = clean_stream_url(raw_u)
+        clean_u = clean_stream_url(sanitize_url(raw_u))
         if not clean_u:
             continue
         norm_u = clean_u.rstrip("/")
@@ -818,15 +995,17 @@ def run_standalone_speedtest_mode(input_file: str, min_speed: float = MIN_SPEED_
     )
 
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    pages_host = "https://" + "tvzb.github.io"
+    epg_host = "https://" + "live.fanmingming.com"
     out_txt_lines = [
         "更新时间,#genre#",
-        f"测速完成: {now_str},[https://tvzb.github.io/IPTV/live.txt](https://tvzb.github.io/IPTV/live.txt)",
+        f"测速完成: {now_str},{pages_host}/IPTV/live.txt",
         "测速优选频道,#genre#",
     ]
     out_m3u_lines = [
-        '#EXTM3U x-tvg-url="[https://live.fanmingming.com/e.xml](https://live.fanmingming.com/e.xml)"',
+        f'#EXTM3U x-tvg-url="{epg_host}/e.xml"',
         f'#EXTINF:-1 tvg-name="更新时间" group-title="更新时间",测速完成: {now_str}',
-        '[https://tvzb.github.io/IPTV/live.m3u](https://tvzb.github.io/IPTV/live.m3u)',
+        f'{pages_host}/IPTV/live.m3u',
     ]
 
     for ch in channel_order:
@@ -859,7 +1038,7 @@ def run_five_step_workflow(min_speed: float = MIN_SPEED_KBS):
 
     tested_url_set: Set[str] = set(all_seen_urls)
     for _, raw_u in raw_records:
-        cu = clean_stream_url(raw_u)
+        cu = clean_stream_url(sanitize_url(raw_u))
         if cu:
             tested_url_set.add(cu.rstrip("/"))
 
