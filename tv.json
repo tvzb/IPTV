@@ -1,0 +1,10 @@
+{
+  "lives": [
+    {
+      "name": "高清电视直播",
+      "type": 0,
+      "url": "https://tvzb.github.io/IPTV/live.txt",
+      "epg": "https://live.fanmingming.com/e.xml"
+    }
+  ]
+}
