@@ -1,21 +1,17 @@
 # -*- coding: utf-8 -*-
 """
 IPTV 自动化五步工作流引擎 & 独立在线测速脚本
-(TVBox 零黑屏跳台 + 连续多切片稳态测速 + H264/国内直连流畅度优先排序 + 左上角台标 OCR 纠错)
 
-针对【前面的源卡顿、后面的源流畅、部分源无画面几秒跳台】三大痛点的核心修复：
-  1. 解决“无画面几秒后自动跳台”：
-     - 拦截只有 1 个固定切片或重复切片的“僵尸假直播流”（TVBox 播完几秒即跳台）；
-     - 使用 ffprobe 严格校验视频流是否包含真实的【解码关键帧 (I-Frame / key_frame=1)】以及标准像素格式 (`yuv420p`)，
-       剔除只有包头没有实际视频帧、或 10-bit 怪异编码导致电视盒子硬解黑屏的流。
-  2. 解决“排在前面的源反而卡顿，后面的源更流畅”：
-     - 连续多切片稳态测速：对于 M3U8 直播流，不再只测 1 个切片，而是连续下载最后 2~3 个不同切片（最高采样 1.2MB），
-       如果第 2 个切片掉速或卡死，直接判定为“突发缓存假快源”并淘汰；
-     - 科学重构排序优先级 (`stream_sort_key`)：
-       ① 编码兼容性与流畅度等级：**1080P H.264 (AVC)** 排在最前（所有电视盒子 100% 硬解秒开不卡），其次是 720P H.264，
-          而极易引起电视盒子高码率缓冲或硬解黑屏的 4K / HEVC(H.265) 降权排后；
-       ② 国内直连亲和度评分：纯 IPv4 运营商/酒店直连源（路径含 `/tsfile/live/`、`/pltv/`、`/hls/` 等）且连续多切片无抖动的源优先置顶，
-          不再让海外 GitHub 服务器测出的“跨国 CDN 虚高突发速度”霸占榜首！
+核心特性：
+  1. 搜索词严格使用「更新 {月份} CCTV-6,http」与「更新 {月份} CCTV6,http」，支持自由选择采集页数 (1~5页)；
+  2. 按分辨率动态速度门槛过滤：
+     - 1920x1080 (1080P)：流畅阈值 >= 650 KB/s，最低可播门槛 >= 350 KB/s（低于 350 KB/s 直接过滤，彻底消灭 0.10Mbps 黑屏转圈源）
+     - 1280x720  (720P) ：流畅阈值 >= 420 KB/s，最低可播门槛 >= 240 KB/s
+     - 720x576/574 (标清)：流畅阈值 >= 200 KB/s，最低可播门槛 >= 120 KB/s
+  3. 同一频道严格按四档优先级排序：
+     ① 高清且流畅 (Tier 4) -> ② 流畅标清 (Tier 3) -> ③ 高清卡顿备用 (Tier 2) -> ④ 标清卡顿备用 (Tier 1)
+  4. 测速切片视频画面左上角台标 OCR 识别与频道名称自动纠错；
+  5. 输出菜单固定为：央视频道 -> 卫视频道 -> 更新时间 (仅显示 YYYY-MM-DD) -> 频道定制 (仅显示 微信：bofutz)。
 """
 import argparse
 import datetime
@@ -36,6 +32,7 @@ import requests
 from config import (
     CHUNK_DOWNLOAD_MAX_BYTES,
     CHUNK_DOWNLOAD_TIMEOUT,
+    CUSTOM_WECHAT_LABEL,
     DEFAULT_SEARCH_PAGES,
     ENABLE_LOGO_OCR,
     MAX_CANDIDATES_PER_CHANNEL,
@@ -49,11 +46,18 @@ from config import (
     RAW_SOURCES_TXT,
     REQUEST_TIMEOUT,
     RESULTS_PER_SEARCH_PAGE,
+    SPEED_FLUENT_1080P,
+    SPEED_FLUENT_720P,
+    SPEED_FLUENT_SD,
+    SPEED_MIN_1080P,
+    SPEED_MIN_720P,
+    SPEED_MIN_SD,
     build_channel_Lookup_map,
     clean_stream_url,
     extract_ip_port,
     extrapolate_channels_from_seed,
     get_domestic_headers,
+    get_resolution_speed_thresholds,
     is_blacklisted_url,
     load_user_channel_structure,
     normalize_channel_name,
@@ -120,62 +124,44 @@ def sanitize_url(u: str) -> str:
     return u
 
 
-def get_tvbox_playability_tier(width: int, height: int, vtag: str) -> Tuple[int, int]:
+def classify_stream_quality_group(width: int, height: int, speed_kbs: float, vtag: str) -> Tuple[int, str]:
     """
-    专为 TVBox 电视盒子设计的【流畅度与画质黄金排序等级】：
-      - 第 5 级（最高优）：1080P (1920x1080) + H264 编码 —— 兼顾满屏高清与 100% 硬件秒解，不黑屏、不卡顿；
-      - 第 4 级（次高优）：720P (1280x720) + H264 编码 —— 极速秒开，带宽占用适中，国内跨网最稳；
-      - 第 3 级：1080P/720P + HEVC(H265) 编码 —— 虽高清但部分老盒子硬解慢或易高码率缓冲，排在同级 H264 之后；
-      - 第 2 级：4K (3840x2160) —— 码率极大（常超 12Mbps），家庭宽带跨省极易转圈卡顿，不再盲目排第一；
-      - 第 1 级：标清 (576P/480P) —— 保底可用源。
+    严格按照用户指定的四档排序逻辑对单个直播源定级：
+      - 第 4 档 (最高优先级)：【高清且流畅】(1080P 速度 >= 650KB/s，或 720P 速度 >= 420KB/s)
+      - 第 3 档 (第二优先级)：【流畅标清】  (576P/574P 标清，且速度 >= 200KB/s)
+      - 第 2 档 (第三优先级)：【高清卡顿】  (1080P 速度在 350~650KB/s，或 720P 速度在 240~420KB/s)
+      - 第 1 档 (第四优先级)：【标清卡顿】  (576P/574P 标清，速度在 120~200KB/s)
     """
-    if width <= 0 or height <= 0:
-        return 0, 0
+    min_req, fluent_req, is_hd = get_resolution_speed_thresholds(width, height)
+    is_fluent = speed_kbs >= fluent_req
 
-    is_h264 = "H264" in vtag.upper() or "AVC" in vtag.upper()
-    pixels = width * height
-
-    # 1080P 档位
-    if 1000 <= height <= 1200 or 1800 <= width <= 2048:
-        return (5 if is_h264 else 3), pixels
-
-    # 720P 档位
-    if 700 <= height < 1000 or 1200 <= width < 1800:
-        return (4 if is_h264 else 3), pixels
-
-    # 4K 超高清档位（码率过高易卡顿，排在稳定的 1080P/720P H264 后面）
-    if height > 1200 or width > 2048:
-        return 2, pixels
-
-    # 标清档位
-    if height >= 360 and width >= 640:
-        return (2 if is_h264 else 1), pixels
-
-    return 0, pixels
+    if is_hd and is_fluent:
+        return 4, "高清流畅"
+    elif (not is_hd) and is_fluent:
+        return 3, "流畅标清"
+    elif is_hd and (not is_fluent):
+        return 2, "高清备用"
+    else:
+        return 1, "标清备用"
 
 
-def stream_sort_key(item: Tuple[str, float, float, int, int, str]) -> Tuple[int, int, float, float]:
+def stream_sort_key(item: Tuple[str, float, float, int, int, str]) -> Tuple[int, int, int, float, float]:
     """
-    排序主函数：
-      1. TVBox 黄金流畅画质等级 (1080P H264 > 720P H264 > HEVC/4K > 标清)
-      2. 国内直连稳定性分档（将虚高速度截断封顶在 2500 KB/s，防止海外 CDN 测出 10000 KB/s 排第一结果国内卡死）
-      3. 首包低延迟奖励 (-ttfb_ms)
+    同一频道直播源排序主键：
+      1. 流畅度与画质四档分类 (4:高清且流畅 > 3:流畅标清 > 2:高清卡顿 > 1:标清卡顿)
+      2. H.264 硬解兼容性优先 (H264 盒子秒开不黑屏，优于 HEVC)
+      3. 同档位下分辨率高度 (如在高清流畅档内，1080P 排在 720P 前)
+      4. 实测稳态速度 (封顶 2500 KB/s 防海外虚高)
+      5. 首包低延迟 (-ttfb_ms)
     """
     url, speed_kbs, ttfb_ms, width, height, vtag = item
-    play_tier, pixels = get_tvbox_playability_tier(width, height, vtag)
-
-    # 判断是否具有典型的国内酒店/运营商原生直连特征（国内播放最稳）
-    lower_u = url.lower()
-    is_domestic_direct = int(
-        bool(re.search(r'://\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', lower_u))
-        or any(k in lower_u for k in ("/tsfile/live/", "/pltv/", "chinamobile", "unicom", "telecom", "migu"))
-    )
-
-    # 关键改进：将速度得分封顶在 2500 KB/s (即 20Mbps)，消除海外服务器对国际 CDN 的虚高测速偏见
+    quality_tier, _ = classify_stream_quality_group(width, height, speed_kbs, vtag)
+    is_h264 = 1 if ("H264" in vtag.upper() or "AVC" in vtag.upper()) else 0
+    res_height = 1080 if (height >= 1000 or width >= 1800) else (720 if height >= 700 else height)
     capped_speed = min(round(speed_kbs, 1), 2500.0)
-    low_latency_score = -round(ttfb_ms, 0)
+    low_latency = -round(ttfb_ms, 0)
 
-    return (play_tier, is_domestic_direct, capped_speed, low_latency_score)
+    return (quality_tier, is_h264, res_height, capped_speed, low_latency)
 
 
 def get_current_month_str() -> str:
@@ -448,7 +434,7 @@ def extract_raw_entries_from_text(content: str) -> List[Tuple[str, str]]:
         return entries
 
     for line in lines:
-        if line.startswith("#") or ",#genre#" in line or "更新时间" in line or "更新日期" in line:
+        if line.startswith("#") or ",#genre#" in line or "更新时间" in line or "更新日期" in line or "频道定制" in line:
             continue
         if "," in line and ("http://" in line or "https://" in line):
             parts = line.split(",", 1)
@@ -472,6 +458,7 @@ def step1_search_and_extract(target_channels: Set[str], search_pages: int = DEFA
     )
     print("=" * 86, flush=True)
 
+    # 严格只使用指定的两个搜索关键词，不搜索其它额外卫视关键词
     exact_queries = [
         f"更新 {curr_month} CCTV-6,http",
         f"更新 {curr_month} CCTV6,http",
@@ -633,17 +620,16 @@ def check_hls_stream_security(m3u8_text: str, base_url: str) -> Tuple[bool, str]
 
 def verify_video_stream_with_ffprobe(raw_bytes: bytes) -> Tuple[bool, int, int, str, str]:
     """
-    严格校验视频流（解决 TVBox 有声音无画面、黑屏几秒自动跳台的问题）：
-      1. 检查视频轨编码（H264 / HEVC）、分辨率与像素格式（拦截非标准 yuv420p 导致的盒子硬解黑屏）；
-      2. 检查采样数据中是否真实解码出至少 1 个视频帧 (`nb_read_packets` / 关键帧)，杜绝只有空表头无画面的假流；
-      3. 提取 MPEG-TS SDT 的 `service_name` 辅助台标校对。
+    严格校验视频流真实可解码画面帧（杜绝像图一那样只有分辨率标签但无法解码出画面的黑屏源）：
+      1. 校验视频编码、分辨率、像素格式 (`yuv420p`)；
+      2. 校验切片内是否包含至少 1 个 **IDR 关键帧 (`flags` 含 `K`)** 且数据包不少于 5 个。
     """
     try:
         cmd = [
             "ffprobe", "-v", "error",
             "-select_streams", "v:0",
-            "-read_intervals", "%+#8",
-            "-show_entries", "stream=codec_name,width,height,pix_fmt,avg_frame_rate:packet=flags:program_tags=service_name:format_tags=service_name",
+            "-read_intervals", "%+#15",
+            "-show_entries", "stream=codec_name,width,height,pix_fmt:packet=flags:program_tags=service_name:format_tags=service_name",
             "-of", "json",
             "-i", "pipe:0"
         ]
@@ -675,14 +661,16 @@ def verify_video_stream_with_ffprobe(raw_bytes: bytes) -> Tuple[bool, int, int, 
         if width < 640 or height < 360:
             return False, width, height, f"分辨率过低({width}x{height})", ""
 
-        # 拦截 10-bit 怪异像素格式或损坏的像素格式（许多电视盒子硬解 10-bit H264/HEVC 会直接黑屏跳台）
         if pix_fmt and ("10le" in pix_fmt or "422" in pix_fmt or "444" in pix_fmt):
             return False, width, height, f"盒子不兼容像素格式({pix_fmt})", ""
 
-        # 检查是否真实读取到了视频数据包（防止只有 PMT/PAT 表头但没有视频帧的“黑屏跳台流”）
         packets = data.get("packets", [])
-        if len(packets) == 0:
-            return False, width, height, "无有效视频数据包(黑屏跳台流)", ""
+        if len(packets) < 3:
+            return False, width, height, "视频帧数据残缺(黑屏无画面)", ""
+
+        has_keyframe = any("K" in str(pkt.get("flags", "")) for pkt in packets)
+        if not has_keyframe and len(raw_bytes) < 350 * 1024:
+            return False, width, height, "缺失起播关键帧(黑屏转圈)", ""
 
         service_hint = ""
         for prog in data.get("programs", []):
@@ -772,16 +760,15 @@ def evaluate_domestic_ip_affinity(url: str, ttfb_ms: float) -> float:
         return 0.0
 
     weight = 1.0
-    # 国内广电/运营商/酒店源典型特征加权
     if any(k in lower_u for k in ("/tsfile/live/", "/pltv/", "chinamobile", "unicom", "telecom", "migu")):
-        weight *= 1.35
+        weight *= 1.20
     elif re.search(r'://\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', lower_u):
-        weight *= 1.25
+        weight *= 1.15
 
     if ttfb_ms < 400:
-        weight *= 1.10
+        weight *= 1.08
     elif ttfb_ms > 1800:
-        weight *= 0.75
+        weight *= 0.78
 
     return weight
 
@@ -833,7 +820,6 @@ def test_single_stream_tvbox(
                 full_m3u8 = m3u8_resp.text
 
                 if "#EXT-X-STREAM-INF" in full_m3u8:
-                    # 解决前排高码率卡顿：当多码率 M3U8 列表包含多个子流时，优先挑选 1080P (1920x1080)，避免盲目选最后一个超高码率 4K 导致卡顿
                     lines_m3u = [l.strip() for l in full_m3u8.splitlines() if l.strip()]
                     chosen_sub = ""
                     for i, line_str in enumerate(lines_m3u):
@@ -864,12 +850,10 @@ def test_single_stream_tvbox(
                     if line.strip() and not line.strip().startswith("#")
                 ]
 
-                # 核心修复：拦截只有 1 个切片或重复相同切片的“几秒跳台僵尸源”
                 unique_segments = list(dict.fromkeys(segments))
                 if len(unique_segments) < 2 and len(segments) < 2:
                     return channel_name, channel_name, clean_url, 0.0, ttfb_ms, 0, 0, False, "单切片闪退假流(几秒跳台)"
 
-                # 取最后 3 个不同切片进行连续稳态下载测试
                 ts_urls = unique_segments[-3:] if len(unique_segments) >= 3 else unique_segments[-2:]
             except Exception:
                 return channel_name, channel_name, clean_url, 0.0, ttfb_ms, 0, 0, False, "M3U8解析失败"
@@ -913,7 +897,6 @@ def test_single_stream_tvbox(
             if time.time() - download_start >= CHUNK_DOWNLOAD_TIMEOUT or bytes_received >= CHUNK_DOWNLOAD_MAX_BYTES:
                 break
 
-        # 关键校验：对于 HLS 切片流，如果连 2 个切片都无法连续拉下，或者总数据量不足 260KB，说明后续播放必卡顿或跳台
         if bytes_received < MIN_REQUIRED_BYTES or segments_ok == 0:
             return channel_name, channel_name, clean_url, 0.0, ttfb_ms, 0, 0, False, "后续切片断流/数据不足"
         if is_hls and len(ts_urls) >= 2 and segments_ok < 2 and bytes_received < 450 * 1024:
@@ -944,7 +927,7 @@ def test_single_stream_tvbox(
             width, height = m3u8_res_hint
             video_tag = f"{width}x{height} (H264)"
 
-        # 计算稳态速度：若测试了多个切片，采用【最低切片速度与平均速度的加权值】，彻底惩罚“第1秒极快、第2秒卡死”的假高速源
+        # 计算多切片稳态速度
         duration = max(time.time() - download_start, 0.12)
         avg_speed_kbs = (bytes_received / 1024.0) / duration
         if len(segment_speeds) >= 2:
@@ -955,7 +938,25 @@ def test_single_stream_tvbox(
 
         effective_speed_kbs = steady_speed_kbs * affinity_weight
 
-        # 识别切片画面左上角台标 Logo，自动纠正挂羊头卖狗肉的错乱频道
+        # 【核心改进】按当前画面的实际分辨率校验其专属最低速度门槛！
+        min_req_speed, fluent_req_speed, _ = get_resolution_speed_thresholds(width, height)
+        if effective_speed_kbs < min_req_speed:
+            return (
+                channel_name,
+                channel_name,
+                clean_url,
+                effective_speed_kbs,
+                ttfb_ms,
+                width,
+                height,
+                False,
+                f"{width}x{height}速度不足({effective_speed_kbs:.0f}<{min_req_speed:.0f}KB/s)"
+            )
+
+        _, tier_label = classify_stream_quality_group(width, height, effective_speed_kbs, video_tag)
+        tagged_vtag = f"{video_tag} [{tier_label}]"
+
+        # 识别切片画面左上角台标 Logo，自动纠正错位频道
         final_channel_name = channel_name
         detected_ch = recognize_channel_from_video_slice(raw_bytes, service_hint=service_hint, target_channels=target_channels)
         if detected_ch:
@@ -965,7 +966,7 @@ def test_single_stream_tvbox(
                 if not target_channels or norm_detected in target_channels:
                     final_channel_name = norm_detected
 
-        return final_channel_name, channel_name, clean_url, effective_speed_kbs, ttfb_ms, width, height, True, video_tag
+        return final_channel_name, channel_name, clean_url, effective_speed_kbs, ttfb_ms, width, height, True, tagged_vtag
 
     except Exception:
         return channel_name, channel_name, clean_url, 0.0, 9999.0, 0, 0, False, "连接超时"
@@ -973,7 +974,6 @@ def test_single_stream_tvbox(
 
 def batch_evaluate_streams(
     pool: Dict[str, List[str]],
-    min_speed: float,
     stage_title: str,
     target_channels: Set[str] = None,
     base_accumulated_count: int = 0
@@ -984,10 +984,14 @@ def batch_evaluate_streams(
             tasks.append((ch, u))
 
     ocr_status = "已开启 (RapidOCR 左上角台标识别纠错)" if (ENABLE_LOGO_OCR and _OCR_AVAILABLE) else "仅 TS 元数据校验"
-    print("\n" + "=" * 86, flush=True)
+    print("\n" + "=" * 90, flush=True)
     print(f"⚡ {stage_title}", flush=True)
-    print(f"   - 待测总数: {len(tasks)} 条 | 稳态速度门槛: {min_speed:.1f} KB/s | 画面台标识别: {ocr_status}", flush=True)
-    print("=" * 86, flush=True)
+    print(
+        f"   - 待测总数: {len(tasks)} 条 | 分辨率动态门槛: 1080P>={SPEED_MIN_1080P:.0f}KB/s(流畅{SPEED_FLUENT_1080P:.0f}) / 720P>={SPEED_MIN_720P:.0f}KB/s(流畅{SPEED_FLUENT_720P:.0f}) / 标清>={SPEED_MIN_SD:.0f}KB/s(流畅{SPEED_FLUENT_SD:.0f})",
+        flush=True
+    )
+    print(f"   - 画面台标识别: {ocr_status}", flush=True)
+    print("=" * 90, flush=True)
 
     qualified: Dict[str, List[Tuple[str, float, float, int, int, str]]] = defaultdict(list)
     if not tasks:
@@ -1007,18 +1011,17 @@ def batch_evaluate_streams(
         for fut in as_completed(futures):
             tested += 1
             final_ch, orig_ch, url, spd, ttfb, width, height, ok, vtag = fut.result()
-            if ok and spd >= min_speed:
+            if ok:
                 passed += 1
                 if final_ch != orig_ch:
                     corrected_count += 1
                     print(
-                        f"  [🔄台标纠错] 视频左上角台标识别为「{final_ch}」，已将原「{orig_ch}」自动改正为「{final_ch}」！({vtag}, 稳态 {spd:.0f}KB/s)",
+                        f"  [🔄台标纠错] 视频左上角台标识别为「{final_ch}」，已将原「{orig_ch}」自动改正为「{final_ch}」！({vtag}, {spd:.0f}KB/s)",
                         flush=True
                     )
                 qualified[final_ch].append((url, spd, ttfb, width, height, vtag))
             else:
-                reason_key = vtag if not ok else "低于稳态速度门槛"
-                rejected_reasons[reason_key] += 1
+                rejected_reasons[vtag] += 1
 
             if tested % 40 == 0 or tested == len(tasks):
                 elapsed = max(time.time() - start_t, 0.1)
@@ -1029,7 +1032,7 @@ def batch_evaluate_streams(
                     )
                 else:
                     print(
-                        f"  [TVBox多切片稳态测速] {tested}/{len(tasks)} | 达标源: {passed} 条 (台标自动改正: {corrected_count} 条) | 耗时: {elapsed:.1f}s",
+                        f"  [TVBox分辨率动态测速] {tested}/{len(tasks)} | 达标源: {passed} 条 (台标自动改正: {corrected_count} 条) | 耗时: {elapsed:.1f}s",
                         flush=True
                     )
 
@@ -1062,7 +1065,7 @@ def step4_fission_high_speed_sources(
             fission_seen.add(clean_stream_url(url).rstrip("/"))
             all_high_speed_seeds.append((ch, url, spd, w, h, vtag))
 
-    all_high_speed_seeds.sort(key=lambda x: (get_tvbox_playability_tier(x[3], x[4], x[5])[0], x[2]), reverse=True)
+    all_high_speed_seeds.sort(key=lambda x: (classify_stream_quality_group(x[3], x[4], x[2], x[5])[0], x[2]), reverse=True)
 
     cctv_fission_added = 0
     sat_fission_added = 0
@@ -1110,30 +1113,26 @@ def step5_merge_sort_and_export(
 ):
     step3_count = sum(len(v) for v in step3_qualified.values())
     step5_count = sum(len(v) for v in step5_qualified.values())
-    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    date_only_str = datetime.datetime.now().strftime("%Y-%m-%d")
     pages_host = "https://" + "tvzb.github.io"
-
-    print("\n" + "=" * 88, flush=True)
-    print("🏆 【第五步(2/2)】汇总合并全部达标源，按 TVBox 流畅度黄金法则 (1080P H264 + 国内直连 + 多切片稳态速度) 排序输出", flush=True)
-    print(f"   - 第三步初次测速达标源 (含台标纠错归位): {step3_count} 条", flush=True)
-    print(f"   - 第五步裂变新源二次测速新增达标源 (含台标纠错归位): {step5_count} 条", flush=True)
-    print(f"{'网页频道名称':<18} | {'有效源数':<8} | {'首选规格(编码)':<18} | {'稳态实测速度':<13} | {'首包延迟':<10}", flush=True)
-    print("-" * 88, flush=True)
-
-    txt_lines: List[str] = [
-        "更新时间,#genre#",
-        f"{now_str},{pages_host}/IPTV/live.txt",
-    ]
     epg_host = "https://" + "live.fanmingming.com"
+
+    print("\n" + "=" * 92, flush=True)
+    print("🏆 【第五步(2/2)】汇总合并达标源，按【1.高清且流畅 -> 2.流畅标清 -> 3.高清卡顿 -> 4.标清卡顿】排序输出", flush=True)
+    print(f"   - 第三步初次测速达标源: {step3_count} 条 | 第五步裂变新源二次测速新增达标源: {step5_count} 条", flush=True)
+    print(f"{'频道名称':<18} | {'有效源数':<8} | {'首选规格与档位':<28} | {'稳态实测速度':<13} | {'首包延迟':<10}", flush=True)
+    print("-" * 92, flush=True)
+
+    txt_lines: List[str] = []
     m3u_lines: List[str] = [
         f'#EXTM3U x-tvg-url="{epg_host}/e.xml"',
-        f'#EXTINF:-1 tvg-name="更新时间" group-title="更新时间",{now_str}',
-        f'{pages_host}/IPTV/live.m3u',
     ]
 
     total_channels_ready = 0
     total_streams_ready = 0
+    first_valid_stream_url = f"{pages_host}/IPTV/live.txt"
 
+    # 1. 输出「央视频道」与「卫视频道」在最前
     for group_name, ch_list in user_struct.items():
         group_txt = [f"{group_name},#genre#"]
         group_has_items = False
@@ -1147,11 +1146,10 @@ def step5_merge_sort_and_export(
                 if norm_u not in combined_map or stream_sort_key(item) > stream_sort_key(combined_map[norm_u]):
                     combined_map[norm_u] = item
 
+            # 严格按四档规则排序：高清且流畅 -> 流畅标清 -> 高清卡顿 -> 标清卡顿
             sorted_streams = sorted(combined_map.values(), key=stream_sort_key, reverse=True)
 
-            # 同一个 IP 端口在排名前列时做交错打散，避免前 3 个源全来自同一个服务器导致一卡全卡
-            primary_streams: List[Tuple[str, float, float, int, int, str]] = []
-            secondary_streams: List[Tuple[str, float, float, int, int, str]] = []
+            final_streams: List[Tuple[str, float, float, int, int, str]] = []
             ip_counter: Dict[str, int] = defaultdict(int)
 
             for item in sorted_streams:
@@ -1159,20 +1157,17 @@ def step5_merge_sort_and_export(
                 host_key = extract_ip_port(url) or url
                 if ip_counter[host_key] < MAX_SAME_IP_PER_CHANNEL:
                     ip_counter[host_key] += 1
-                    if ip_counter[host_key] == 1:
-                        primary_streams.append(item)
-                    else:
-                        secondary_streams.append(item)
-
-            final_streams = primary_streams + secondary_streams
+                    final_streams.append(item)
 
             if final_streams:
                 group_has_items = True
                 total_channels_ready += 1
                 total_streams_ready += len(final_streams)
                 top_url, top_spd, top_ttfb, top_w, top_h, top_vtag = final_streams[0]
+                if first_valid_stream_url.endswith("/IPTV/live.txt"):
+                    first_valid_stream_url = top_url
                 print(
-                    f"{display_ch:<18} | {len(final_streams):<8} | {top_vtag:<18} | {top_spd:>7.1f} KB/s | {top_ttfb:>6.0f} ms",
+                    f"{display_ch:<18} | {len(final_streams):<8} | {top_vtag:<28} | {top_spd:>7.1f} KB/s | {top_ttfb:>6.0f} ms",
                     flush=True
                 )
                 for url, spd, ttfb, w, h, vtag in final_streams:
@@ -1180,10 +1175,26 @@ def step5_merge_sort_and_export(
                     m3u_lines.append(f'#EXTINF:-1 tvg-name="{std_ch}" group-title="{group_name}",{display_ch}')
                     m3u_lines.append(url)
             else:
-                print(f"{display_ch:<18} | {'0 (无达标)':<8} | {'--':<18} | {'--':>11} | {'--':>9}", flush=True)
+                print(f"{display_ch:<18} | {'0 (无达标)':<8} | {'--':<28} | {'--':>11} | {'--':>9}", flush=True)
 
         if group_has_items:
             txt_lines.extend(group_txt)
+
+    # 2. 按图二要求，在央视频道、卫视频道下方依次添加「更新时间」与「频道定制」
+    # 点开「更新时间」仅显示年-月-日，例如 2026-10-31
+    txt_lines.extend([
+        "更新时间,#genre#",
+        f"{date_only_str},{first_valid_stream_url}",
+        "频道定制,#genre#",
+        f"{CUSTOM_WECHAT_LABEL},{first_valid_stream_url}",
+    ])
+
+    m3u_lines.extend([
+        f'#EXTINF:-1 tvg-name="{date_only_str}" group-title="更新时间",{date_only_str}',
+        first_valid_stream_url,
+        f'#EXTINF:-1 tvg-name="{CUSTOM_WECHAT_LABEL}" group-title="频道定制",{CUSTOM_WECHAT_LABEL}',
+        first_valid_stream_url,
+    ])
 
     with open(OUTPUT_LIVE_TXT, "w", encoding="utf-8") as f:
         f.write("\n".join(txt_lines) + "\n")
@@ -1191,14 +1202,14 @@ def step5_merge_sort_and_export(
     with open(OUTPUT_LIVE_M3U, "w", encoding="utf-8") as f:
         f.write("\n".join(m3u_lines) + "\n")
 
-    print("=" * 88, flush=True)
+    print("=" * 92, flush=True)
     print(f"🎉 五步工作流全部完成！")
-    print(f"   - 订阅更新时间戳: {now_str}")
-    print(f"   - 覆盖网页定制频道: {total_channels_ready} 个")
-    print(f"   - 最终收录真视频高速源: {total_streams_ready} 条 (1080P H264 + 国内直连优先置顶 + 不同IP交错排布)")
+    print(f"   - 分类菜单顺序: 央视频道 -> 卫视频道 -> 更新时间 ({date_only_str}) -> 频道定制 ({CUSTOM_WECHAT_LABEL})")
+    print(f"   - 覆盖官方频道: {total_channels_ready} 个")
+    print(f"   - 最终收录真视频源: {total_streams_ready} 条 (按 高清流畅 -> 流畅标清 -> 高清备用 -> 标清备用 排序)")
     print(f"   - TVBox TXT 订阅文件: {OUTPUT_LIVE_TXT}")
     print(f"   - TVBox M3U 订阅文件: {OUTPUT_LIVE_M3U}")
-    print("=" * 88, flush=True)
+    print("=" * 92, flush=True)
 
 
 def save_intermediate_cleaned_pool(
@@ -1206,17 +1217,12 @@ def save_intermediate_cleaned_pool(
     user_struct: Dict[str, List[str]],
     target_channels: Set[str]
 ):
-    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    date_only_str = datetime.datetime.now().strftime("%Y-%m-%d")
     pages_host = "https://" + "tvzb.github.io"
     epg_host = "https://" + "live.fanmingming.com"
-    txt_lines: List[str] = [
-        "更新时间,#genre#",
-        f"待测源归档: {now_str},{pages_host}/IPTV/raw_sources.txt",
-    ]
+    txt_lines: List[str] = []
     m3u_lines: List[str] = [
         f'#EXTM3U x-tvg-url="{epg_host}/e.xml"',
-        f'#EXTINF:-1 tvg-name="更新时间" group-title="更新时间",待测源归档: {now_str}',
-        f'{pages_host}/IPTV/raw_sources.m3u',
     ]
     for group_name, ch_list in user_struct.items():
         group_txt = [f"{group_name},#genre#"]
@@ -1229,17 +1235,24 @@ def save_intermediate_cleaned_pool(
         if len(group_txt) > 1:
             txt_lines.extend(group_txt)
 
+    txt_lines.extend([
+        "更新时间,#genre#",
+        f"{date_only_str},{pages_host}/IPTV/raw_sources.txt",
+        "频道定制,#genre#",
+        f"{CUSTOM_WECHAT_LABEL},{pages_host}/IPTV/raw_sources.txt",
+    ])
+
     with open(RAW_SOURCES_TXT, "w", encoding="utf-8") as f:
         f.write("\n".join(txt_lines) + "\n")
     with open(RAW_SOURCES_M3U, "w", encoding="utf-8") as f:
         f.write("\n".join(m3u_lines) + "\n")
 
 
-def run_standalone_speedtest_mode(input_file: str, min_speed: float = MIN_SPEED_KBS):
-    print("=" * 82, flush=True)
-    print(f"⚡ 【在线测速模式 speedtest.yml】读取输入文件: {input_file} (速度门槛: {min_speed:.1f} KB/s)", flush=True)
-    print("   流程：HTTP 去重 -> 多切片稳态测速 + 左上角台标 OCR 识别纠错 -> 1080P H264 国内直连优先排序", flush=True)
-    print("=" * 82, flush=True)
+def run_standalone_speedtest_mode(input_file: str):
+    print("=" * 86, flush=True)
+    print(f"⚡ 【在线测速模式 speedtest.yml】读取输入文件: {input_file}", flush=True)
+    print("   流程：HTTP 去重 -> 分辨率动态门槛测速 + 左上角台标 OCR 纠错 -> 四档流畅度排序", flush=True)
+    print("=" * 86, flush=True)
 
     if not os.path.exists(input_file):
         print(f"[!] 未找到输入文件 {input_file}，请检查输入内容。", flush=True)
@@ -1268,35 +1281,37 @@ def run_standalone_speedtest_mode(input_file: str, min_speed: float = MIN_SPEED_
 
     qualified = batch_evaluate_streams(
         pool,
-        min_speed=min_speed,
-        stage_title="【在线去重测速】多切片稳态测速 & 左上角台标 OCR 自动纠错"
+        stage_title="【在线去重测速】分辨率动态速度门槛 & 左上角台标 OCR 自动纠错"
     )
 
     for q_ch in qualified:
         if q_ch not in channel_order:
             channel_order.append(q_ch)
 
-    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    date_only_str = datetime.datetime.now().strftime("%Y-%m-%d")
     pages_host = "https://" + "tvzb.github.io"
     epg_host = "https://" + "live.fanmingming.com"
-    out_txt_lines = [
-        "更新时间,#genre#",
-        f"测速完成: {now_str},{pages_host}/IPTV/live.txt",
-        "测速优选频道,#genre#",
-    ]
-    out_m3u_lines = [
-        f'#EXTM3U x-tvg-url="{epg_host}/e.xml"',
-        f'#EXTINF:-1 tvg-name="更新时间" group-title="更新时间",测速完成: {now_str}',
-        f'{pages_host}/IPTV/live.m3u',
-    ]
+    first_url = f"{pages_host}/IPTV/live.txt"
+
+    out_txt_lines = ["测速优选频道,#genre#"]
+    out_m3u_lines = [f'#EXTM3U x-tvg-url="{epg_host}/e.xml"']
 
     for ch in channel_order:
         items = qualified.get(ch, [])
         items.sort(key=stream_sort_key, reverse=True)
         for url, spd, ttfb, w, h, vtag in items:
+            if first_url.endswith("/IPTV/live.txt"):
+                first_url = url
             out_txt_lines.append(f"{ch},{url}")
             out_m3u_lines.append(f'#EXTINF:-1 tvg-name="{ch}" group-title="测速优选",{ch}')
             out_m3u_lines.append(url)
+
+    out_txt_lines.extend([
+        "更新时间,#genre#",
+        f"{date_only_str},{first_url}",
+        "频道定制,#genre#",
+        f"{CUSTOM_WECHAT_LABEL},{first_url}",
+    ])
 
     with open(OUTPUT_LIVE_TXT, "w", encoding="utf-8") as f:
         f.write("\n".join(out_txt_lines) + "\n")
@@ -1306,14 +1321,14 @@ def run_standalone_speedtest_mode(input_file: str, min_speed: float = MIN_SPEED_
     print(f"[✓] 在线去重测速与台标纠错完成！结果已写入 {OUTPUT_LIVE_TXT} 与 {OUTPUT_LIVE_M3U}", flush=True)
 
 
-def run_five_step_workflow(min_speed: float = MIN_SPEED_KBS, search_pages: int = DEFAULT_SEARCH_PAGES):
+def run_five_step_workflow(search_pages: int = DEFAULT_SEARCH_PAGES):
     total_start = time.time()
 
     user_struct = load_user_channel_structure()
     target_channels, norm_to_display = build_channel_Lookup_map(user_struct)
 
     print(
-        f"[*] 当前目标分类数: {len(user_struct)} 个 | 合计目标频道数: {len(target_channels)} 个 | 设定搜索采集页数: 前 {search_pages} 页",
+        f"[*] 当前官方分类数: {len(user_struct)} 个 | 合计目标频道数: {len(target_channels)} 个 | 设定搜索采集页数: 前 {search_pages} 页",
         flush=True
     )
 
@@ -1329,8 +1344,7 @@ def run_five_step_workflow(min_speed: float = MIN_SPEED_KBS, search_pages: int =
 
     step3_qualified = batch_evaluate_streams(
         cleaned_pool,
-        min_speed=min_speed,
-        stage_title="【第三步】初次多切片稳态测速、真视频帧校验 & 左上角台标 OCR 自动纠错",
+        stage_title="【第三步】初次分辨率动态测速、关键帧校验 & 左上角台标 OCR 自动纠错",
         target_channels=target_channels
     )
     step3_passed_total = sum(len(v) for v in step3_qualified.values())
@@ -1344,8 +1358,7 @@ def run_five_step_workflow(min_speed: float = MIN_SPEED_KBS, search_pages: int =
 
     step5_qualified = batch_evaluate_streams(
         fission_pool,
-        min_speed=min_speed,
-        stage_title="【第五步(1/2)】对第四步智能裂变【新生成】的直播源进行二次多切片稳态测速 & 台标 OCR 自动纠错",
+        stage_title="【第五步(1/2)】对第四步智能裂变【新生成】的直播源进行二次分辨率动态测速 & 台标 OCR 纠错",
         target_channels=target_channels,
         base_accumulated_count=step3_passed_total
     )
@@ -1358,22 +1371,19 @@ def run_five_step_workflow(min_speed: float = MIN_SPEED_KBS, search_pages: int =
 
 def main():
     parser = argparse.ArgumentParser(description="IPTV 自动化五步搜索裂变测速引擎")
-    parser.add_argument("min_speed_pos", nargs="?", type=float, default=None, help="最低测速门槛 (KB/s)")
     parser.add_argument("search_pages_pos", nargs="?", type=int, default=None, help="搜索结果采集页数 (默认 1)")
     parser.add_argument("--mode", choices=["iptv", "speedtest"], default="iptv", help="运行模式: iptv 或 speedtest")
     parser.add_argument("--input", default=RAW_SOURCES_TXT, help="speedtest 模式下的输入文件路径")
-    parser.add_argument("--min-speed", type=float, default=MIN_SPEED_KBS, help="最低速度阈值 (KB/s)")
     parser.add_argument("--pages", type=int, default=DEFAULT_SEARCH_PAGES, help="采集搜索结果的页数 (默认 1)")
 
     args, _ = parser.parse_known_args()
-    effective_min_speed = args.min_speed_pos if args.min_speed_pos is not None else args.min_speed
     effective_pages = args.search_pages_pos if args.search_pages_pos is not None else args.pages
     effective_pages = max(1, int(effective_pages))
 
     if args.mode == "speedtest":
-        run_standalone_speedtest_mode(args.input, min_speed=effective_min_speed)
+        run_standalone_speedtest_mode(args.input)
     else:
-        run_five_step_workflow(min_speed=effective_min_speed, search_pages=effective_pages)
+        run_five_step_workflow(search_pages=effective_pages)
 
 
 if __name__ == "__main__":
