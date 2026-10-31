@@ -1,19 +1,28 @@
 # -*- coding: utf-8 -*-
 """
-IPTV 配置模块（TVBox 零黑屏 + 国内直连流畅度优先排序版）
+IPTV 核心配置模块：
+- 直接采用本模块内置的官方频道名称与顺序定义：
+  1. 央视频道：CCTV 1~17 综合/专业频道 (严格排除 CCTV-5+)
+  2. 卫视频道：30 个省级卫视频道 (7个置顶优先卫视 + 23个按首字拼音升序排列卫视，福建统一命名为东南卫视)
+- 分辨率差异化速度门槛与四档排序规则：
+  - 1920x1080 (1080P)：流畅播放要求 >= 650 KB/s，最低入围门槛 >= 350 KB/s
+  - 1280x720  (720P) ：流畅播放要求 >= 420 KB/s，最低入围门槛 >= 240 KB/s
+  - 720x576/574 (标清)：流畅播放要求 >= 200 KB/s，最低入围门槛 >= 120 KB/s
+  - 同一频道排序优先级：1.高清且流畅 -> 2.流畅标清 -> 3.高清卡顿(备用) -> 4.标清卡顿(备用)
 """
-import json
 import os
 import re
 import urllib.parse
 from typing import Dict, List, Optional, Set, Tuple
 
 # 输出文件路径定义
-CHANNELS_JSON_FILE = "channels.json"
 RAW_SOURCES_TXT = "raw_sources.txt"
 RAW_SOURCES_M3U = "raw_sources.m3u"
 OUTPUT_LIVE_TXT = "live.txt"
 OUTPUT_LIVE_M3U = "live.m3u"
+
+# 底部定制信息配置
+CUSTOM_WECHAT_LABEL = "微信：bofutz"
 
 # 仿真国内 TVBox (ExoPlayer / IjkPlayer) 标识与国内 IP 请求头
 TVBOX_USER_AGENT = "okhttp/3.15"
@@ -25,19 +34,37 @@ DOMESTIC_SIM_IPS = [
     "61.139.2.69",
 ]
 
-# 搜索采集页数与每页条数配置
+# 搜索采集页数与每页条数配置（默认为 1 即首页；选 2 采集第 1、2 页，以此类推）
 DEFAULT_SEARCH_PAGES = int(os.environ.get("SEARCH_PAGES", "1") or "1")
 RESULTS_PER_SEARCH_PAGE = 20
 
-# 测速与并发参数（升级为多切片稳态测速，彻底过滤假快源和黑屏跳台源）
+# 测速与并发参数
 REQUEST_TIMEOUT = 2.6
-CHUNK_DOWNLOAD_TIMEOUT = 3.2          # 延长稳态采样窗口至 3.2 秒，测出真实持续带宽而非首包突发缓存
-CHUNK_DOWNLOAD_MAX_BYTES = 1200 * 1024  # 采样上限提升至 1.2MB，确保连续拉取 2~3 个切片验证不断流
-MIN_REQUIRED_BYTES = 260 * 1024       # 至少完整下载 260KB 真实视频流才算有效
+CHUNK_DOWNLOAD_TIMEOUT = 3.2          # 稳态采样窗口 3.2 秒
+CHUNK_DOWNLOAD_MAX_BYTES = 1200 * 1024  # 采样上限 1.2MB，连续拉取多切片验证稳定性
+MIN_REQUIRED_BYTES = 240 * 1024       # 至少完整下载 240KB 真实视频流数据
 MAX_WORKERS = 36
-MIN_SPEED_KBS = 220.0                 # 默认最低持续有效速度阈值 (KB/s)
 MAX_CANDIDATES_PER_CHANNEL = 65
 MAX_SAME_IP_PER_CHANNEL = 5
+
+# ==============================================================================
+# 按分辨率动态设定的【流畅播放速度】与【最低可播入围门槛】(单位: KB/s)
+# 换算参考：1 Mbps = 128 KB/s
+# ==============================================================================
+# 1. 1920x1080 (含 4K/1080P 全高清)：码率通常在 4.5~6.5Mbps
+SPEED_FLUENT_1080P = 650.0   # >= 650 KB/s (约 5.2 Mbps) 判定为【高清且流畅】
+SPEED_MIN_1080P = 350.0      # <  350 KB/s (约 2.8 Mbps) 必转圈黑屏，直接过滤淘汰！
+
+# 2. 1280x720 (720P 高清)：码率通常在 2.5~3.5Mbps
+SPEED_FLUENT_720P = 420.0    # >= 420 KB/s (约 3.4 Mbps) 判定为【高清且流畅】
+SPEED_MIN_720P = 240.0       # <  240 KB/s 直接过滤淘汰！
+
+# 3. 720x576 / 720x574 (标清 SD)：码率通常在 1.0~1.5Mbps
+SPEED_FLUENT_SD = 200.0      # >= 200 KB/s (约 1.6 Mbps) 判定为【流畅标清】
+SPEED_MIN_SD = 120.0         # <  120 KB/s 直接过滤淘汰！
+
+# 默认通用速度参考值
+MIN_SPEED_KBS = SPEED_MIN_SD
 
 # 是否开启测速时视频画面左上角台标 OCR 识别自动纠错
 ENABLE_LOGO_OCR = os.environ.get("ENABLE_LOGO_OCR", "true").strip().lower() not in ("false", "0", "no")
@@ -51,16 +78,36 @@ DEFAULT_CCTV_CHANNELS = [
     "CCTV-17 农业农村",
 ]
 
-# 官方默认省级卫视频道
+# 官方默认省级卫视频道（7个置顶优先卫视 + 23个按首字拼音升序排列省级卫视，福建统一为东南卫视）
 DEFAULT_SATELLITE_CHANNELS = [
     # 7个置顶优先卫视
     "江西卫视", "东方卫视", "北京卫视", "江苏卫视", "浙江卫视", "湖南卫视", "辽宁卫视",
-    # 其余23个省级卫视（按首字拼音升序排列）
-    "安徽卫视", "重庆卫视", "东南卫视", "甘肃卫视", "广东卫视",
-    "广西卫视", "贵州卫视", "海南卫视", "河北卫视", "河南卫视",
-    "黑龙江卫视", "湖北卫视", "吉林卫视", "内蒙古卫视", "宁夏卫视",
-    "青海卫视", "山东卫视", "山西卫视", "陕西卫视", "深圳卫视",
-    "四川卫视", "天津卫视", "西藏卫视", "新疆卫视", "云南卫视",
+    # 其余23个省级卫视（严格按首字汉语拼音字母升序排列）
+    "安徽卫视",   # Anhui
+    "重庆卫视",   # Chongqing
+    "东南卫视",   # Dongnan
+    "甘肃卫视",   # Gansu
+    "广东卫视",   # Guangdong
+    "广西卫视",   # Guangxi
+    "贵州卫视",   # Guizhou
+    "海南卫视",   # Hainan
+    "河北卫视",   # Hebei
+    "河南卫视",   # Henan
+    "黑龙江卫视", # Heilongjiang
+    "湖北卫视",   # Hubei
+    "吉林卫视",   # Jilin
+    "内蒙古卫视", # Neimenggu
+    "宁夏卫视",   # Ningxia
+    "青海卫视",   # Qinghai
+    "山东卫视",   # Shandong
+    "山西卫视",   # Shanxi
+    "陕西卫视",   # Shaanxi
+    "深圳卫视",   # Shenzhen
+    "四川卫视",   # Sichuan
+    "天津卫视",   # Tianjin
+    "西藏卫视",   # Xizang
+    "新疆卫视",   # Xinjiang
+    "云南卫视",   # Yunnan
 ]
 
 ALL_DEFAULT_TARGETS = DEFAULT_CCTV_CHANNELS + DEFAULT_SATELLITE_CHANNELS
@@ -160,7 +207,7 @@ SATELLITE_PINYIN_SLUGS: Dict[str, List[str]] = {
     "云南卫视": ["yunnan", "yunnanws"],
 }
 
-# 黑名单正则规则：拦截组播假源、Flash、纯音频、一次性动态Token及海外不稳定代理源
+# 黑名单正则规则
 BLACKLIST_URL_PATTERNS = re.compile(
     r'('
     r'/(rtp|udp)/|'                     # 拦截两IP中间以/rtp/或/udp/相连的组播假源
@@ -171,11 +218,26 @@ BLACKLIST_URL_PATTERNS = re.compile(
     r'\.(mp3|aac|wav|ogg|flac|apk|jpg|png|gif)(\?|$)|'
     r'jdshipin\.com|'                   # 拦截假源
     r'264788\.xyz|'                     # 拦截一次性 livekey 代理源
-    r'[?&](livekey|migutoken|auth_key|txSecret|wsSecret|token|sign)=|' # 拦截带时效签名易过期跳台的源
+    r'[?&](livekey|migutoken|auth_key|txSecret|wsSecret|token|sign)=|'
     r'P2PChannelID=pd://'
     r')',
     re.IGNORECASE
 )
+
+
+def get_resolution_speed_thresholds(width: int, height: int) -> Tuple[float, float, bool]:
+    """
+    根据视频画面分辨率返回对应的速度要求：
+    返回: (最低可播入围速度 min_req_kbs, 流畅不卡顿速度 fluent_req_kbs, 是否为高清 is_hd)
+      - 1080P (height >= 1000 或 width >= 1800): 最低 350 KB/s，流畅 650 KB/s，属于高清(HD)
+      - 720P  (height >= 700  或 width >= 1200): 最低 240 KB/s，流畅 420 KB/s，属于高清(HD)
+      - 576P/574P 标清 (其余分辨率)            : 最低 120 KB/s，流畅 200 KB/s，属于标清(SD)
+    """
+    if height >= 1000 or width >= 1800:
+        return SPEED_MIN_1080P, SPEED_FLUENT_1080P, True
+    if height >= 700 or width >= 1200:
+        return SPEED_MIN_720P, SPEED_FLUENT_720P, True
+    return SPEED_MIN_SD, SPEED_FLUENT_SD, False
 
 
 def get_domestic_headers(extra_headers: Dict[str, str] = None) -> Dict[str, str]:
@@ -195,35 +257,8 @@ def get_domestic_headers(extra_headers: Dict[str, str] = None) -> Dict[str, str]
 
 
 def load_user_channel_structure() -> Dict[str, List[str]]:
-    env_json = os.environ.get("CUSTOM_CHANNELS_JSON", "").strip()
-    if env_json:
-        try:
-            data = json.loads(env_json)
-            if isinstance(data, dict) and len(data) > 0:
-                print(f"[*] 【运行模式】网页端触发：载入网站自定义分类 ({len(data)} 个分类)", flush=True)
-                return data
-            elif isinstance(data, list) and len(data) > 0:
-                parsed_dict = {}
-                for item in data:
-                    if isinstance(item, dict) and "category" in item and "channels" in item:
-                        parsed_dict[item["category"]] = list(item["channels"])
-                if parsed_dict:
-                    print(f"[*] 【运行模式】网页端触发：载入网站数组分类 ({len(parsed_dict)} 个分类)", flush=True)
-                    return parsed_dict
-        except Exception as e:
-            print(f"[!] 解析网页端 CUSTOM_CHANNELS_JSON 异常: {e}", flush=True)
-
-    if os.path.exists(CHANNELS_JSON_FILE):
-        try:
-            with open(CHANNELS_JSON_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict) and len(data) > 0:
-                print(f"[*] 已从 {CHANNELS_JSON_FILE} 加载频道列表 ({len(data)} 个分类)", flush=True)
-                return data
-        except Exception:
-            pass
-
-    print("[*] 【运行模式】采用 config.py 官方定义 (CCTV 1~17 排除 5+，7优先+23拼音省级卫视)", flush=True)
+    """直接沿用 config.py 内置官方央卫视定义与排序"""
+    print("[*] 已加载 config.py 官方频道列表 (央视频道 17 个 + 卫视频道 30 个)", flush=True)
     return {
         "央视频道": list(DEFAULT_CCTV_CHANNELS),
         "卫视频道": list(DEFAULT_SATELLITE_CHANNELS),
@@ -260,9 +295,6 @@ def normalize_channel_name(raw_name: str, custom_targets: Set[str] = None) -> st
 
     clean_name = raw_name.strip()
 
-    if any(bad in clean_name for bad in ("康巴", "兵团")):
-        return ""
-
     if re.search(r'(?i)cctv[-_ ]?5\+', clean_name):
         return ""
 
@@ -289,14 +321,7 @@ def normalize_channel_name(raw_name: str, custom_targets: Set[str] = None) -> st
         if sat == "东方卫视" and ("上海卫视" in clean_name or "东方台" in clean_name):
             return "东方卫视"
 
-    if custom_targets:
-        name_stripped = re.sub(r'[\s\-_高清超清HD4K8K]', '', clean_name.upper())
-        for target in custom_targets:
-            t_norm = re.sub(r'[\s\-_高清超清HD4K8K]', '', target.upper())
-            if t_norm and t_norm == name_stripped:
-                return target
-
-    return clean_name
+    return ""
 
 
 def parse_ocr_text_to_channel(ocr_raw_text: str, custom_targets: Set[str] = None) -> Optional[str]:
@@ -336,12 +361,6 @@ def parse_ocr_text_to_channel(ocr_raw_text: str, custom_targets: Set[str] = None
             return sat
         if prov in compact and ("卫视" in compact or "衛視" in compact):
             return sat
-
-    if custom_targets:
-        for t in custom_targets:
-            t_clean = re.sub(r'[\s\-_高清超清HD4K8K]', '', t.upper())
-            if len(t_clean) >= 3 and t_clean in upper_compact:
-                return t
 
     return None
 
