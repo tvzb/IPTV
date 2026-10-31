@@ -475,8 +475,6 @@ def step1_search_and_extract(target_channels: Set[str], search_pages: int = DEFA
     exact_queries = [
         f"更新 {curr_month} CCTV-6,http",
         f"更新 {curr_month} CCTV6,http",
-        f"{curr_month} 湖南卫视,http",
-        f"{curr_month} 江西卫视,http",
     ]
 
     raw_extracted_records: List[Tuple[str, str]] = []
