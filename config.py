@@ -1,15 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-IPTV 配置模块：
-- 支持双模自动识别：
-  1. 网页点击运行：优先读取环境变量 CUSTOM_CHANNELS_JSON 或 channels.json；
-  2. GitHub 页面手动点击 "Run workflow" 或定时任务：统一采用本模块内置的官方频道名称与顺序定义：
-     - CCTV 1~17 综合/专业频道 (严格排除 CCTV-5+)
-     - 30 个省级卫视频道 (7个置顶优先卫视 + 23个按首字拼音升序排列卫视；已剔除康巴卫视与兵团卫视，福建卫视统一命名为东南卫视)
-- 新增特性：
-  1. 支持自由配置采集页数 DEFAULT_SEARCH_PAGES (默认 1，即第 1 页；选 2 采集第 1、2 页，以此类推)；
-  2. 测速视频切片左上角台标 OCR 识别与频道名称自动纠错映射；
-  3. 扩容单频道候选源上限，解决部分频道源少或无源问题。
+IPTV 配置模块（TVBox 零黑屏 + 国内直连流畅度优先排序版）
 """
 import json
 import os
@@ -36,16 +27,17 @@ DOMESTIC_SIM_IPS = [
 
 # 搜索采集页数与每页条数配置
 DEFAULT_SEARCH_PAGES = int(os.environ.get("SEARCH_PAGES", "1") or "1")
-RESULTS_PER_SEARCH_PAGE = 20  # GitHub 搜索每页标准 20 条结果
+RESULTS_PER_SEARCH_PAGE = 20
 
-# 测速与并发参数（已扩容以保留更多有效源）
-REQUEST_TIMEOUT = 2.8
-CHUNK_DOWNLOAD_TIMEOUT = 2.2
-CHUNK_DOWNLOAD_MAX_BYTES = 512 * 1024  # 512KB 采样足以读取完整 TS 视频帧用于 ffprobe 与台标 OCR 截图
+# 测速与并发参数（升级为多切片稳态测速，彻底过滤假快源和黑屏跳台源）
+REQUEST_TIMEOUT = 2.6
+CHUNK_DOWNLOAD_TIMEOUT = 3.2          # 延长稳态采样窗口至 3.2 秒，测出真实持续带宽而非首包突发缓存
+CHUNK_DOWNLOAD_MAX_BYTES = 1200 * 1024  # 采样上限提升至 1.2MB，确保连续拉取 2~3 个切片验证不断流
+MIN_REQUIRED_BYTES = 260 * 1024       # 至少完整下载 260KB 真实视频流才算有效
 MAX_WORKERS = 36
-MIN_SPEED_KBS = 200.0  # 默认最低有效速度阈值 (KB/s)
-MAX_CANDIDATES_PER_CHANNEL = 65  # 扩容：每个频道最多候选测速源数提升至 65 条
-MAX_SAME_IP_PER_CHANNEL = 5      # 扩容：同 IP 限额提升至 5 条，避免误杀大酒店/运营商聚合源
+MIN_SPEED_KBS = 220.0                 # 默认最低持续有效速度阈值 (KB/s)
+MAX_CANDIDATES_PER_CHANNEL = 65
+MAX_SAME_IP_PER_CHANNEL = 5
 
 # 是否开启测速时视频画面左上角台标 OCR 识别自动纠错
 ENABLE_LOGO_OCR = os.environ.get("ENABLE_LOGO_OCR", "true").strip().lower() not in ("false", "0", "no")
@@ -59,41 +51,21 @@ DEFAULT_CCTV_CHANNELS = [
     "CCTV-17 农业农村",
 ]
 
-# 官方默认省级卫视频道（7个指定置顶优先卫视 + 23个按首字拼音升序排列省级卫视；已剔除康巴/兵团，福建统一为东南卫视）
+# 官方默认省级卫视频道
 DEFAULT_SATELLITE_CHANNELS = [
     # 7个置顶优先卫视
     "江西卫视", "东方卫视", "北京卫视", "江苏卫视", "浙江卫视", "湖南卫视", "辽宁卫视",
-    # 其余23个省级卫视（严格按首字汉语拼音字母升序排列）
-    "安徽卫视",   # Anhui
-    "重庆卫视",   # Chongqing
-    "东南卫视",   # Dongnan (福建卫视统一为东南卫视)
-    "甘肃卫视",   # Gansu
-    "广东卫视",   # Guangdong
-    "广西卫视",   # Guangxi
-    "贵州卫视",   # Guizhou
-    "海南卫视",   # Hainan
-    "河北卫视",   # Hebei
-    "河南卫视",   # Henan
-    "黑龙江卫视", # Heilongjiang
-    "湖北卫视",   # Hubei
-    "吉林卫视",   # Jilin
-    "内蒙古卫视", # Neimenggu
-    "宁夏卫视",   # Ningxia
-    "青海卫视",   # Qinghai
-    "山东卫视",   # Shandong
-    "山西卫视",   # Shanxi
-    "陕西卫视",   # Shaanxi
-    "深圳卫视",   # Shenzhen
-    "四川卫视",   # Sichuan
-    "天津卫视",   # Tianjin
-    "西藏卫视",   # Xizang
-    "新疆卫视",   # Xinjiang
-    "云南卫视",   # Yunnan
+    # 其余23个省级卫视（按首字拼音升序排列）
+    "安徽卫视", "重庆卫视", "东南卫视", "甘肃卫视", "广东卫视",
+    "广西卫视", "贵州卫视", "海南卫视", "河北卫视", "河南卫视",
+    "黑龙江卫视", "湖北卫视", "吉林卫视", "内蒙古卫视", "宁夏卫视",
+    "青海卫视", "山东卫视", "山西卫视", "陕西卫视", "深圳卫视",
+    "四川卫视", "天津卫视", "西藏卫视", "新疆卫视", "云南卫视",
 ]
 
 ALL_DEFAULT_TARGETS = DEFAULT_CCTV_CHANNELS + DEFAULT_SATELLITE_CHANNELS
 
-# 央视台标副标题关键词辅助映射（当左上角 OCR 识别到台标下方中文时的精准回退匹配）
+# 央视台标副标题关键词辅助映射
 CCTV_SUBTITLE_MAP: Dict[str, str] = {
     "综合": "CCTV-1 综合",
     "财经": "CCTV-2 财经",
@@ -116,7 +88,7 @@ CCTV_SUBTITLE_MAP: Dict[str, str] = {
     "农业": "CCTV-17 农业农村",
 }
 
-# 卫视频道【拼音缩写】对照字典（用于 dfwshd -> jxwshd / hnwshd 同构缩写裂变）
+# 卫视频道【拼音缩写】对照字典
 SATELLITE_ABBR_SLUGS: Dict[str, List[str]] = {
     "江西卫视": ["jxws", "jx"],
     "东方卫视": ["dfws", "shws", "df"],
@@ -152,7 +124,7 @@ SATELLITE_ABBR_SLUGS: Dict[str, List[str]] = {
     "云南卫视": ["ynws", "yn"],
 }
 
-# 卫视频道【全拼】对照字典（用于 dongfang -> jiangxi / hunan 同构全拼裂变）
+# 卫视频道【全拼】对照字典
 SATELLITE_PINYIN_SLUGS: Dict[str, List[str]] = {
     "江西卫视": ["jiangxi", "jiangxiws"],
     "东方卫视": ["dongfang", "dongfangws", "shanghai", "shanghaiws"],
@@ -188,7 +160,7 @@ SATELLITE_PINYIN_SLUGS: Dict[str, List[str]] = {
     "云南卫视": ["yunnan", "yunnanws"],
 }
 
-# 黑名单正则规则：拦截两IP相连的 /rtp/ 与 /udp/ 组播假流、Flash、纯音频、一次性Token等
+# 黑名单正则规则：拦截组播假源、Flash、纯音频、一次性动态Token及海外不稳定代理源
 BLACKLIST_URL_PATTERNS = re.compile(
     r'('
     r'/(rtp|udp)/|'                     # 拦截两IP中间以/rtp/或/udp/相连的组播假源
@@ -199,7 +171,7 @@ BLACKLIST_URL_PATTERNS = re.compile(
     r'\.(mp3|aac|wav|ogg|flac|apk|jpg|png|gif)(\?|$)|'
     r'jdshipin\.com|'                   # 拦截假源
     r'264788\.xyz|'                     # 拦截一次性 livekey 代理源
-    r'[?&](livekey|migutoken|auth_key|txSecret|wsSecret)=|'
+    r'[?&](livekey|migutoken|auth_key|txSecret|wsSecret|token|sign)=|' # 拦截带时效签名易过期跳台的源
     r'P2PChannelID=pd://'
     r')',
     re.IGNORECASE
@@ -251,7 +223,7 @@ def load_user_channel_structure() -> Dict[str, List[str]]:
         except Exception:
             pass
 
-    print("[*] 【运行模式】采用 config.py 官方定义 (CCTV 1~17 排除 5+，7优先+23拼音省级卫视，已剔除康巴/兵团，福建统一为东南卫视)", flush=True)
+    print("[*] 【运行模式】采用 config.py 官方定义 (CCTV 1~17 排除 5+，7优先+23拼音省级卫视)", flush=True)
     return {
         "央视频道": list(DEFAULT_CCTV_CHANNELS),
         "卫视频道": list(DEFAULT_SATELLITE_CHANNELS),
@@ -328,24 +300,15 @@ def normalize_channel_name(raw_name: str, custom_targets: Set[str] = None) -> st
 
 
 def parse_ocr_text_to_channel(ocr_raw_text: str, custom_targets: Set[str] = None) -> Optional[str]:
-    """
-    将视频画面左上角台标 OCR 识别出的文字解析并映射为标准频道名称：
-    - 支持识别 CCTV-1 ~ CCTV-17 (自动纠正 OCR 常见的把 C 识别为 G/O/0、把 - 识别为空格等情况)
-    - 支持识别 CCTV 台标下方中文副标题（如“体育”-> CCTV-5 体育、“电影”-> CCTV-6 电影）
-    - 支持识别 30 个省级卫视频道名称（如“湖南卫视”、“东方卫视”、“江西卫视”等）
-    """
     if not ocr_raw_text:
         return None
 
-    # 合并多行并清理无关符号
     compact = re.sub(r'[\s\r\n]+', ' ', ocr_raw_text).strip()
     upper_compact = re.sub(r'[\s\-_.:：·]+', '', compact.upper())
 
-    # 排除 CCTV-5+ 体育赛事频道
     if re.search(r'(?:CCTV|CCIV|CCT|GCTV|OCTV)0?5\+', upper_compact):
         return None
 
-    # 1. 匹配 CCTV + 数字 (兼容 OCR 对半透明台标常见的形近字误判：CCTV / CCIV / GCTV / OCTV / CGTV)
     m_cctv = re.search(r'(?:CCTV|CCIV|CCT|GCTV|OCTV|0CTV|中央)0?(\d{1,2})(?!\d)', upper_compact)
     if m_cctv:
         num = int(m_cctv.group(1))
@@ -357,14 +320,12 @@ def parse_ocr_text_to_channel(ocr_raw_text: str, custom_targets: Set[str] = None
                         return std_cctv
             return f"CCTV-{num}"
 
-    # 2. 若台标出现了 CCTV 字样但数字模糊，结合台标下方的中文副标题定位（如 CCTV + 体育 -> CCTV-5 体育）
     if any(tag in upper_compact for tag in ("CCTV", "CCIV", "GCTV", "中央")):
         for sub_kw, std_cctv in CCTV_SUBTITLE_MAP.items():
             if sub_kw in compact:
                 if not custom_targets or std_cctv in custom_targets:
                     return std_cctv
 
-    # 3. 匹配省级卫视频道台标
     if any(k in compact for k in ("福建卫视", "东南卫视", "福建")):
         if "卫视" in compact or "东南" in compact:
             return "东南卫视"
@@ -373,11 +334,9 @@ def parse_ocr_text_to_channel(ocr_raw_text: str, custom_targets: Set[str] = None
         prov = sat.replace("卫视", "")
         if sat in compact:
             return sat
-        # 左上角台标常出现 "湖南卫视" 或单独省份名+"卫视"
         if prov in compact and ("卫视" in compact or "衛視" in compact):
             return sat
 
-    # 4. 自定义频道列表精确匹配
     if custom_targets:
         for t in custom_targets:
             t_clean = re.sub(r'[\s\-_高清超清HD4K8K]', '', t.upper())
@@ -437,7 +396,6 @@ def extrapolate_channels_from_seed(seed_url: str, seed_channel: str = "") -> Lis
     if clean_seed.count("&") >= 4 or ".swf" in clean_seed.lower():
         return results
 
-    # 规则 1：标准 CCTV 标识裂变 (如 cctv1hd.m3u8 -> cctv1hd.m3u8 ~ cctv17hd.m3u8)
     cctv_pattern = re.search(
         r'([/=_.-])(cctv[-_]?0?(\d{1,2}))([a-zA-Z0-9_\-]*)(\.m3u8|\.flv|\.ts|/|$|\?)',
         clean_seed,
@@ -469,7 +427,6 @@ def extrapolate_channels_from_seed(seed_url: str, seed_channel: str = "") -> Lis
             results.append((std_ch, extrapolated_url))
         return results
 
-    # 规则 2：卫视频道缩写/全拼标识裂变 (如 dfwshd.m3u8 -> jxwshd.m3u8, hnwshd.m3u8)
     norm_seed_ch = normalize_channel_name(seed_channel) if seed_channel else ""
 
     sat_check_order = []
@@ -533,7 +490,6 @@ def extrapolate_channels_from_seed(seed_url: str, seed_channel: str = "") -> Lis
                     results.append((target_sat, extrapolated_url))
                 return results
 
-    # 规则 3：央视频道四位/三位数字序号规律 (如 0001_1.m3u8 -> 0001_1 ~ 0017_1)
     if not norm_seed_ch or norm_seed_ch.startswith("CCTV"):
         num_seq_match = re.search(r'([/_])(0*(\d{1,4}))(_\d+)?(\.m3u8|\.ts|\.flv)', clean_seed, re.IGNORECASE)
         if num_seq_match:
