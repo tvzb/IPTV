@@ -14,10 +14,6 @@ on:
           - '3'
           - '4'
           - '5'
-      min_speed:
-        description: '最低测速门槛 (KB/s)，默认 150'
-        required: false
-        default: '150'
       enable_logo_ocr:
         description: '开启测速视频画面左上角台标识别与频道名称自动纠错'
         required: false
@@ -26,10 +22,6 @@ on:
         options:
           - 'true'
           - 'false'
-      custom_channels_json:
-        description: '网页端设置的分类与频道列表 JSON (若为空则采用 config.py 官方定义)'
-        required: false
-        default: ''
 
   push:
     branches:
@@ -38,7 +30,6 @@ on:
     paths:
       - 'main.py'
       - 'config.py'
-      - 'channels.json'
       - 'requirements.txt'
       - '.github/workflows/main.yml'
 
@@ -51,7 +42,7 @@ permissions:
 
 jobs:
   harvest-and-speedtest:
-    name: 多页全量提取 -> 清洗去重 -> 初次测速与左上角台标纠错 -> 央卫视智能裂变 -> 二次测速排序
+    name: 多页提取 -> 清洗去重 -> 分辨率动态测速与台标纠错 -> 智能裂变 -> 四档流畅排序
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -85,28 +76,17 @@ jobs:
       - name: 4. 执行 IPTV 五步工作流核心脚本
         env:
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN || github.token }}
-          CUSTOM_CHANNELS_JSON: ${{ inputs.custom_channels_json }}
           SEARCH_PAGES: ${{ inputs.search_pages || '1' }}
           ENABLE_LOGO_OCR: ${{ inputs.enable_logo_ocr || 'true' }}
         run: |
-          SPEED_LIMIT="${{ inputs.min_speed }}"
-          if [ -z "$SPEED_LIMIT" ]; then
-            SPEED_LIMIT="150"
-          fi
           PAGES_COUNT="${{ inputs.search_pages }}"
           if [ -z "$PAGES_COUNT" ]; then
             PAGES_COUNT="1"
           fi
           echo "当前设定采集搜索结果页数: 前 ${PAGES_COUNT} 页"
-          echo "当前设定最低测速门槛: ${SPEED_LIMIT} KB/s"
           echo "当前左上角台标 OCR 自动纠错开关: ${ENABLE_LOGO_OCR}"
-          if [ -n "$CUSTOM_CHANNELS_JSON" ]; then
-            echo "$CUSTOM_CHANNELS_JSON" > channels.json
-            echo "已接收网页端提交的自定义频道 JSON 并保存至 channels.json"
-          else
-            echo "本次为手动点击 Run workflow 或定时任务，将采用 config.py 官方定义与排序"
-          fi
-          python main.py "${SPEED_LIMIT}" "${PAGES_COUNT}"
+          echo "直接采用 config.py 官方频道列表与分辨率动态速度标准运行..."
+          python main.py "${PAGES_COUNT}"
 
       - name: 5. 校验并自动提交最新直播源至仓库
         run: |
@@ -115,8 +95,8 @@ jobs:
             exit 1
           fi
           LINE_COUNT=$(wc -l < live.txt)
-          STREAM_COUNT=$(grep -E "^[^#].*,http" live.txt | grep -v "^最新更新:" | wc -l || true)
-          echo "生成校验通过：live.txt 共 ${LINE_COUNT} 行，包含有效高清直播源 ${STREAM_COUNT} 条。"
+          STREAM_COUNT=$(grep -E "^[^#].*,http" live.txt | wc -l || true)
+          echo "生成校验通过：live.txt 共 ${LINE_COUNT} 行，包含有效直播源记录 ${STREAM_COUNT} 条。"
           if [ "$STREAM_COUNT" -lt 5 ]; then
             echo "警告：本次有效源数量过少 (<5条)，跳过覆盖提交以保留上一版可用源！"
             exit 0
@@ -125,13 +105,13 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add live.txt live.m3u raw_sources.txt raw_sources.m3u channels.json 2>/dev/null || git add live.txt live.m3u
+          git add live.txt live.m3u raw_sources.txt raw_sources.m3u 2>/dev/null || git add live.txt live.m3u
 
           if git diff --staged --quiet; then
             echo "直播源列表与上一版本完全一致，无需重复提交。"
           else
             NOW_TIME=$(date '+%Y-%m-%d %H:%M:%S')
-            git commit -m "chore(live): 自动更新高清直播源(前${{ inputs.search_pages || '1' }}页采集+左上角台标OCR纠错+后缀裂变) [${NOW_TIME}]"
+            git commit -m "chore(live): 自动更新直播源(前${{ inputs.search_pages || '1' }}页采集+分辨率动态测速+台标纠错) [${NOW_TIME}]"
             git pull --rebase origin ${{ github.ref_name }} || true
             git push origin HEAD:${{ github.ref_name }}
             echo "最新 TVBox 直播源已成功推送到仓库！"
