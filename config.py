@@ -6,9 +6,10 @@ IPTV 配置模块：
   2. GitHub 页面手动点击 "Run workflow" 或定时任务：统一采用本模块内置的官方频道名称与顺序定义：
      - CCTV 1~17 综合/专业频道 (严格排除 CCTV-5+)
      - 30 个省级卫视频道 (7个置顶优先卫视 + 23个按首字拼音升序排列卫视；已剔除康巴卫视与兵团卫视，福建卫视统一命名为东南卫视)
-- 核心提速与清洗规则：
-  - 彻底拦截两 IP 中间以 /rtp/ 或 /udp/ 连接的组播无图像假流、Flash、纯音频广播；
-  - 精准智能裂变：严格区分央视频道裂变（cctv1hd -> cctv1~17hd）与卫视频道裂变（dfwshd -> jxwshd/hnwshd 等），保留 hd/sd 等画质尾缀。
+- 新增特性：
+  1. 支持自由配置采集页数 DEFAULT_SEARCH_PAGES (默认 1，即第 1 页；选 2 采集第 1、2 页，以此类推)；
+  2. 测速视频切片左上角台标 OCR 识别与频道名称自动纠错映射；
+  3. 扩容单频道候选源上限，解决部分频道源少或无源问题。
 """
 import json
 import os
@@ -33,14 +34,21 @@ DOMESTIC_SIM_IPS = [
     "61.139.2.69",
 ]
 
-# 测速与并发参数
-REQUEST_TIMEOUT = 2.5
-CHUNK_DOWNLOAD_TIMEOUT = 2.0
-CHUNK_DOWNLOAD_MAX_BYTES = 512 * 1024  # 512KB 采样即可完整读取 TS 头与 ffprobe 视频轨
-MAX_WORKERS = 40
+# 搜索采集页数与每页条数配置
+DEFAULT_SEARCH_PAGES = int(os.environ.get("SEARCH_PAGES", "1") or "1")
+RESULTS_PER_SEARCH_PAGE = 20  # GitHub 搜索每页标准 20 条结果
+
+# 测速与并发参数（已扩容以保留更多有效源）
+REQUEST_TIMEOUT = 2.8
+CHUNK_DOWNLOAD_TIMEOUT = 2.2
+CHUNK_DOWNLOAD_MAX_BYTES = 512 * 1024  # 512KB 采样足以读取完整 TS 视频帧用于 ffprobe 与台标 OCR 截图
+MAX_WORKERS = 36
 MIN_SPEED_KBS = 200.0  # 默认最低有效速度阈值 (KB/s)
-MAX_CANDIDATES_PER_CHANNEL = 35  # 每个频道最多候选测速源数（防止测速总量失控）
-MAX_SAME_IP_PER_CHANNEL = 3
+MAX_CANDIDATES_PER_CHANNEL = 65  # 扩容：每个频道最多候选测速源数提升至 65 条
+MAX_SAME_IP_PER_CHANNEL = 5      # 扩容：同 IP 限额提升至 5 条，避免误杀大酒店/运营商聚合源
+
+# 是否开启测速时视频画面左上角台标 OCR 识别自动纠错
+ENABLE_LOGO_OCR = os.environ.get("ENABLE_LOGO_OCR", "true").strip().lower() not in ("false", "0", "no")
 
 # 官方默认央视频道（CCTV 1~17，严格排除 CCTV-5+）
 DEFAULT_CCTV_CHANNELS = [
@@ -84,6 +92,29 @@ DEFAULT_SATELLITE_CHANNELS = [
 ]
 
 ALL_DEFAULT_TARGETS = DEFAULT_CCTV_CHANNELS + DEFAULT_SATELLITE_CHANNELS
+
+# 央视台标副标题关键词辅助映射（当左上角 OCR 识别到台标下方中文时的精准回退匹配）
+CCTV_SUBTITLE_MAP: Dict[str, str] = {
+    "综合": "CCTV-1 综合",
+    "财经": "CCTV-2 财经",
+    "综艺": "CCTV-3 综艺",
+    "中文国际": "CCTV-4 中文国际",
+    "体育": "CCTV-5 体育",
+    "电影": "CCTV-6 电影",
+    "国防军事": "CCTV-7 国防军事",
+    "军事": "CCTV-7 国防军事",
+    "电视剧": "CCTV-8 电视剧",
+    "纪录": "CCTV-9 纪录",
+    "科教": "CCTV-10 科教",
+    "戏曲": "CCTV-11 戏曲",
+    "社会与法": "CCTV-12 社会与法",
+    "新闻": "CCTV-13 新闻",
+    "少儿": "CCTV-14 少儿",
+    "音乐": "CCTV-15 音乐",
+    "奥林匹克": "CCTV-16 奥林匹克",
+    "农业农村": "CCTV-17 农业农村",
+    "农业": "CCTV-17 农业农村",
+}
 
 # 卫视频道【拼音缩写】对照字典（用于 dfwshd -> jxwshd / hnwshd 同构缩写裂变）
 SATELLITE_ABBR_SLUGS: Dict[str, List[str]] = {
@@ -294,6 +325,66 @@ def normalize_channel_name(raw_name: str, custom_targets: Set[str] = None) -> st
                 return target
 
     return clean_name
+
+
+def parse_ocr_text_to_channel(ocr_raw_text: str, custom_targets: Set[str] = None) -> Optional[str]:
+    """
+    将视频画面左上角台标 OCR 识别出的文字解析并映射为标准频道名称：
+    - 支持识别 CCTV-1 ~ CCTV-17 (自动纠正 OCR 常见的把 C 识别为 G/O/0、把 - 识别为空格等情况)
+    - 支持识别 CCTV 台标下方中文副标题（如“体育”-> CCTV-5 体育、“电影”-> CCTV-6 电影）
+    - 支持识别 30 个省级卫视频道名称（如“湖南卫视”、“东方卫视”、“江西卫视”等）
+    """
+    if not ocr_raw_text:
+        return None
+
+    # 合并多行并清理无关符号
+    compact = re.sub(r'[\s\r\n]+', ' ', ocr_raw_text).strip()
+    upper_compact = re.sub(r'[\s\-_.:：·]+', '', compact.upper())
+
+    # 排除 CCTV-5+ 体育赛事频道
+    if re.search(r'(?:CCTV|CCIV|CCT|GCTV|OCTV)0?5\+', upper_compact):
+        return None
+
+    # 1. 匹配 CCTV + 数字 (兼容 OCR 对半透明台标常见的形近字误判：CCTV / CCIV / GCTV / OCTV / CGTV)
+    m_cctv = re.search(r'(?:CCTV|CCIV|CCT|GCTV|OCTV|0CTV|中央)0?(\d{1,2})(?!\d)', upper_compact)
+    if m_cctv:
+        num = int(m_cctv.group(1))
+        if 1 <= num <= 17:
+            prefix = f"CCTV-{num} "
+            for std_cctv in DEFAULT_CCTV_CHANNELS:
+                if std_cctv.startswith(prefix):
+                    if not custom_targets or std_cctv in custom_targets:
+                        return std_cctv
+            return f"CCTV-{num}"
+
+    # 2. 若台标出现了 CCTV 字样但数字模糊，结合台标下方的中文副标题定位（如 CCTV + 体育 -> CCTV-5 体育）
+    if any(tag in upper_compact for tag in ("CCTV", "CCIV", "GCTV", "中央")):
+        for sub_kw, std_cctv in CCTV_SUBTITLE_MAP.items():
+            if sub_kw in compact:
+                if not custom_targets or std_cctv in custom_targets:
+                    return std_cctv
+
+    # 3. 匹配省级卫视频道台标
+    if any(k in compact for k in ("福建卫视", "东南卫视", "福建")):
+        if "卫视" in compact or "东南" in compact:
+            return "东南卫视"
+
+    for sat in DEFAULT_SATELLITE_CHANNELS:
+        prov = sat.replace("卫视", "")
+        if sat in compact:
+            return sat
+        # 左上角台标常出现 "湖南卫视" 或单独省份名+"卫视"
+        if prov in compact and ("卫视" in compact or "衛視" in compact):
+            return sat
+
+    # 4. 自定义频道列表精确匹配
+    if custom_targets:
+        for t in custom_targets:
+            t_clean = re.sub(r'[\s\-_高清超清HD4K8K]', '', t.upper())
+            if len(t_clean) >= 3 and t_clean in upper_compact:
+                return t
+
+    return None
 
 
 def build_channel_Lookup_map(user_struct: Dict[str, List[str]]) -> Tuple[Set[str], Dict[str, str]]:
