@@ -429,6 +429,118 @@ def extract_raw_entries_from_text(content: str) -> List[Tuple[str, str]]:
     return entries
 
 
+def github_api_get(url: str, params: Optional[dict] = None):
+    """GitHub API 请求：带令牌优先，短暂退避，避免单个仓库失败中断全流程。"""
+    headers = get_github_search_headers()
+    headers["Accept"] = "application/vnd.github+json"
+    headers["X-GitHub-Api-Version"] = "2022-11-28"
+    try:
+        resp = requests.get(url, headers=headers, params=params, timeout=18)
+        if resp.status_code in (403, 429):
+            print(f"  [!] GitHub API 限流/拒绝：{resp.status_code} {url}", flush=True)
+        return resp
+    except requests.RequestException as exc:
+        print(f"  [!] GitHub API 请求失败：{exc}", flush=True)
+        return None
+
+
+def discover_recent_github_playlist_files(target_channels: Set[str], days: int = 30,
+                                          max_repositories: int = 35) -> List[Tuple[str, str]]:
+    """按仓库最近推送时间发现候选播放列表，并核对具体文件最近一次提交时间。
+
+    GitHub Code Search 不支持可靠的文件更新时间过滤，因此先用 Repository Search 的
+    pushed:>= 日期缩小到近 N 天活跃仓库，再对候选播放列表路径查询最后一次文件提交。
+    这是比把“更新 2026-11”写死在代码搜索词中更准确的时间筛选方式。
+    """
+    since = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)).date().isoformat()
+    print(f"\n[*] GitHub 最近 {days} 天仓库发现：pushed:>={since}，随后核对播放列表文件提交日期", flush=True)
+    queries = [f'iptv pushed:>={since}', f'(iptv OR m3u OR live-tv) pushed:>={since}']
+    repos = {}
+    for query in queries:
+        resp = github_api_get(f"{GH_API_HOST}/search/repositories", {
+            "q": query, "sort": "updated", "order": "desc", "per_page": "50", "page": "1"
+        })
+        if not resp or resp.status_code != 200:
+            continue
+        for item in resp.json().get("items", []):
+            full_name = item.get("full_name")
+            if full_name:
+                repos[full_name] = item
+        if len(repos) >= max_repositories:
+            break
+    selected = list(repos.values())[:max_repositories]
+    print(f"  [*] 最近活跃仓库候选：{len(selected)} 个", flush=True)
+
+    candidates = []
+    for repo in selected:
+        full_name = repo.get("full_name", "")
+        branch = repo.get("default_branch", "main") or "main"
+        tree_resp = github_api_get(f"{GH_API_HOST}/repos/{full_name}/git/trees/{urllib.parse.quote(branch, safe='')}", {"recursive": "1"})
+        if not tree_resp or tree_resp.status_code != 200:
+            continue
+        tree = tree_resp.json().get("tree", [])
+        paths = []
+        for node in tree:
+            path = node.get("path", "")
+            low = path.lower()
+            if node.get("type") != "blob" or not low.endswith((".txt", ".m3u", ".m3u8")):
+                continue
+            if any(x in low for x in ("readme", "license", "changelog", "issue", "release")):
+                continue
+            if not any(x in low for x in ("iptv", "live", "tv", "m3u", "playlist", "channel", "output", "ipv4")):
+                continue
+            size = node.get("size", 0) or 0
+            if size > 5 * 1024 * 1024:
+                continue
+            paths.append((path, size))
+        # 优先选择常见播放列表目录和较小文本，最多每仓库 2 个文件，控制 API 请求量
+        paths.sort(key=lambda x: (0 if any(k in x[0].lower() for k in ("output", "live", "tv", "m3u")) else 1, x[1]))
+        for path, size in paths[:2]:
+            candidates.append((full_name, branch, path))
+
+    print(f"  [*] 发现候选播放列表文件：{len(candidates)} 个；开始核对文件自身最近提交日期", flush=True)
+    results: List[Tuple[str, str]] = []
+    seen_urls: Set[str] = set()
+    checked = 0
+    for full_name, branch, path in candidates:
+        if checked >= 100:
+            break
+        checked += 1
+        commits = github_api_get(f"{GH_API_HOST}/repos/{full_name}/commits", {"path": path, "per_page": "1"})
+        if not commits or commits.status_code != 200:
+            continue
+        commit_items = commits.json()
+        if not commit_items:
+            continue
+        commit = commit_items[0].get("commit", {}).get("committer", {}).get("date") or commit_items[0].get("commit", {}).get("author", {}).get("date", "")
+        try:
+            committed = datetime.datetime.fromisoformat(commit.replace("Z", "+00:00"))
+            if committed.date() < datetime.date.fromisoformat(since):
+                continue
+        except Exception:
+            continue
+        raw_url = f"{GH_RAW_HOST}/{full_name}/{branch}/{urllib.parse.quote(path, safe='/')}"
+        if raw_url in seen_urls:
+            continue
+        seen_urls.add(raw_url)
+        try:
+            raw_resp = requests.get(raw_url, headers=HEADERS, timeout=18)
+            if raw_resp.status_code != 200 or not raw_resp.text:
+                continue
+            entries = extract_raw_entries_from_text(raw_resp.text)
+            matched = 0
+            for raw_ch, raw_url_str in entries:
+                norm_ch = normalize_channel_name(raw_ch, target_channels)
+                if norm_ch in target_channels:
+                    results.append((norm_ch, raw_url_str))
+                    matched += 1
+            print(f"  [✓] {full_name}/{path} | 文件更新 {committed.date()} | 命中 {matched} 条", flush=True)
+        except requests.RequestException as exc:
+            print(f"  [!] 读取候选文件失败 {full_name}/{path}: {exc}", flush=True)
+    print(f"[*] 最近 {days} 天文件更新检索完成：检查 {checked} 个文件，提取目标频道源 {len(results)} 条", flush=True)
+    return results
+
+
 def step1_search_and_extract(target_channels: Set[str], search_pages: int = DEFAULT_SEARCH_PAGES) -> List[Tuple[str, str]]:
     curr_month = get_current_month_str()
     search_pages = max(1, int(search_pages))
@@ -439,23 +551,40 @@ def step1_search_and_extract(target_channels: Set[str], search_pages: int = DEFA
     )
     print("=" * 86, flush=True)
 
-    # 多维检索：月份更新标记 + CCTV 多种写法 + 省级卫视常见中文名。
-    # GitHub code search 中 in:file / extension:txt|m3u 可减少 README 等噪声。
-    cctv_terms_a = ' OR '.join([f'"CCTV-{i}"' for i in range(1,10)] + [f'CCTV{i}' for i in range(1,10)])
-    cctv_terms_b = ' OR '.join([f'"CCTV-{i}"' for i in range(10,18)] + [f'CCTV{i}' for i in range(10,18)])
+    # 主检索：最近 30 天真实更新过的播放列表文件（仓库活跃时间 + 文件最后提交时间双重核验）。
+    # 这一步不依赖“更新 2026-11”这样的文本标记，避免月初结果过少。
+    raw_extracted_records: List[Tuple[str, str]] = discover_recent_github_playlist_files(
+        target_channels, days=int(os.environ.get("RECENT_DAYS", "30")),
+        max_repositories=int(os.environ.get("MAX_RECENT_REPOS", "60"))
+    )
+
+    # 辅助检索：动态覆盖最近两个自然月份，兼容“更新 YYYY-MM / YYYY年M月 / 更新时间”等写法。
+    # GitHub Code Search 结果用于补充，不作为唯一数据来源。
+    cctv_terms_a = ' OR '.join([f'"CCTV-{i}"' for i in range(1,10)] + [f'CCTV{i}' for i in range(1,10)] + [f'"CCTV {i}"' for i in range(1,10)])
+    cctv_terms_b = ' OR '.join([f'"CCTV-{i}"' for i in range(10,18)] + [f'CCTV{i}' for i in range(10,18)] + [f'"CCTV {i}"' for i in range(10,18)])
     satellite_a = ' OR '.join(['"安徽卫视"','"北京卫视"','"重庆卫视"','"东南卫视"','"甘肃卫视"','"广东卫视"','"广西卫视"','"贵州卫视"','"海南卫视"','"河北卫视"','"河南卫视"','"黑龙江卫视"','"湖北卫视"','"湖南卫视"','"吉林卫视"','"江西卫视"'])
     satellite_b = ' OR '.join(['"江苏卫视"','"辽宁卫视"','"内蒙古卫视"','"宁夏卫视"','"青海卫视"','"山东卫视"','"山西卫视"','"陕西卫视"','"深圳卫视"','"四川卫视"','"天津卫视"','"西藏卫视"','"新疆卫视"','"云南卫视"','"东方卫视"','"浙江卫视"'])
+    month_values = []
+    today = datetime.date.today()
+    for offset in (0, 1):
+        month_index = today.year * 12 + today.month - 1 - offset
+        year, month0 = divmod(month_index, 12)
+        month_values.append(f"{year}-{month0 + 1:02d}")
     exact_queries = [
-        f'"更新 {curr_month}" "CCTV-6"',
-        f'"更新 {curr_month}" CCTV6',
         f'({cctv_terms_a}) AND http in:file',
         f'({cctv_terms_b}) AND http in:file',
         f'({cctv_terms_a}) AND http extension:m3u',
         f'({satellite_a}) AND http in:file',
         f'({satellite_b}) AND http in:file',
+        f'("CCTV-6" OR CCTV6 OR "电影频道") AND http in:file',
     ]
+    for month in month_values:
+        exact_queries.extend([
+            f'"更新 {month}" (CCTV OR CCTV6 OR "卫视")',
+            f'"更新时间" "{month}" (CCTV OR "卫视")',
+            f'"{month}" (CCTV OR "央视" OR "卫视") http in:file',
+        ])
 
-    raw_extracted_records: List[Tuple[str, str]] = []
     visited_files: Set[str] = set()
 
     for q in exact_queries:
@@ -1112,7 +1241,7 @@ def step5_merge_sort_and_export(
 
     total_channels_ready = 0
     total_streams_ready = 0
-    first_valid_stream_url = f"{pages_host}/IPTV/live.txt"
+    first_valid_stream_url = ""
 
     # 1. 输出「央视频道」与「卫视频道」在最前
     for group_name, ch_list in user_struct.items():
@@ -1164,19 +1293,18 @@ def step5_merge_sort_and_export(
 
     # 2. 按图二要求，在央视频道、卫视频道下方依次添加「更新时间」与「频道定制」
     # 点开「更新时间」仅显示年-月-日，例如 2026-10-31
-    txt_lines.extend([
-        "更新时间,#genre#",
-        f"{date_only_str},{first_valid_stream_url}",
-        "频道定制,#genre#",
-        f"{CUSTOM_WECHAT_LABEL},{first_valid_stream_url}",
-    ])
+    txt_lines.append("更新时间,#genre#")
+    txt_lines.append(f"{date_only_str},{first_valid_stream_url}" if first_valid_stream_url else f"{date_only_str},#genre#")
+    txt_lines.append("频道定制,#genre#")
+    txt_lines.append(f"{CUSTOM_WECHAT_LABEL},{first_valid_stream_url}" if first_valid_stream_url else f"{CUSTOM_WECHAT_LABEL},#genre#")
 
-    m3u_lines.extend([
-        f'#EXTINF:-1 tvg-name="{date_only_str}" group-title="更新时间",{date_only_str}',
-        first_valid_stream_url,
-        f'#EXTINF:-1 tvg-name="{CUSTOM_WECHAT_LABEL}" group-title="频道定制",{CUSTOM_WECHAT_LABEL}',
-        first_valid_stream_url,
-    ])
+    if first_valid_stream_url:
+        m3u_lines.extend([
+            f'#EXTINF:-1 tvg-name="{date_only_str}" group-title="更新时间",{date_only_str}',
+            first_valid_stream_url,
+            f'#EXTINF:-1 tvg-name="{CUSTOM_WECHAT_LABEL}" group-title="频道定制",{CUSTOM_WECHAT_LABEL}',
+            first_valid_stream_url,
+        ])
 
     with open(OUTPUT_LIVE_TXT, "w", encoding="utf-8") as f:
         f.write("\n".join(txt_lines) + "\n")
@@ -1185,7 +1313,7 @@ def step5_merge_sort_and_export(
         f.write("\n".join(m3u_lines) + "\n")
 
     print("=" * 92, flush=True)
-    print(f"🎉 五步工作流全部完成！")
+    print("🎉 五步工作流全部完成！" if total_streams_ready else "⚠️ 工作流已执行完毕，但本轮没有通过筛选的直播源；已生成空订阅文件，避免伪造播放地址。", flush=True)
     print(f"   - 分类菜单顺序: 央视频道 -> 卫视频道 -> 更新时间 ({date_only_str}) -> 频道定制 ({CUSTOM_WECHAT_LABEL})")
     print(f"   - 覆盖官方频道: {total_channels_ready} 个")
     print(f"   - 最终收录真视频源: {total_streams_ready} 条 (按 高清流畅 -> 流畅标清 -> 高清备用 -> 标清备用 排序)")
@@ -1365,7 +1493,27 @@ def main():
     if args.mode == "speedtest":
         run_standalone_speedtest_mode(args.input)
     else:
-        run_five_step_workflow(search_pages=effective_pages)
+        try:
+            run_five_step_workflow(search_pages=effective_pages)
+        except Exception as exc:
+            # 即使采集/测速中途异常，也写出可识别的空订阅文件，方便 Actions 上传诊断产物。
+            print(f"[FATAL] 工作流异常：{type(exc).__name__}: {exc}", flush=True)
+            write_emergency_outputs(str(exc))
+            raise
+
+
+def write_emergency_outputs(reason: str = ""):
+    """异常兜底：确保 live.txt / live.m3u 总会生成，不伪造可播放地址。"""
+    date_text = datetime.datetime.now().strftime("%Y-%m-%d")
+    epg_host = "https://live.fanmingming.com"
+    txt = ["央视频道,#genre#", "卫视频道,#genre#", "更新时间,#genre#", f"{date_text},#genre#", "频道定制,#genre#", f"{CUSTOM_WECHAT_LABEL},#genre#"]
+    m3u = [f'#EXTM3U x-tvg-url="{epg_host}/e.xml"']
+    with open(OUTPUT_LIVE_TXT, "w", encoding="utf-8") as f:
+        f.write("\n".join(txt) + "\n")
+    with open(OUTPUT_LIVE_M3U, "w", encoding="utf-8") as f:
+        f.write("\n".join(m3u) + "\n")
+    with open("workflow_error.txt", "w", encoding="utf-8") as f:
+        f.write(reason + "\n")
 
 
 if __name__ == "__main__":

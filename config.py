@@ -33,12 +33,12 @@ RESULTS_PER_SEARCH_PAGE = 20
 
 # 测速与并发参数
 REQUEST_TIMEOUT = 6.0
-CHUNK_DOWNLOAD_TIMEOUT = 9.0          # 云端初筛采样窗口；最终以家庭宽带实测为准
-CHUNK_DOWNLOAD_MAX_BYTES = 3 * 1024 * 1024  # 最多采样 3MB，减少瞬时突发速度误判
+CHUNK_DOWNLOAD_TIMEOUT = 12.0          # 云端初筛采样窗口；最终以家庭宽带实测为准
+CHUNK_DOWNLOAD_MAX_BYTES = 4 * 1024 * 1024  # 最多采样 3MB，减少瞬时突发速度误判
 MIN_REQUIRED_BYTES = 384 * 1024       # 至少取得 384KB 视频数据
-MAX_WORKERS = 8                       # 降低并发，避免测速任务互相争抢带宽
-MAX_CANDIDATES_PER_CHANNEL = 25
-MAX_SAME_IP_PER_CHANNEL = 3
+MAX_WORKERS = 5                       # 降低并发，避免测速任务互相争抢带宽
+MAX_CANDIDATES_PER_CHANNEL = 60
+MAX_SAME_IP_PER_CHANNEL = 5
 
 # ==============================================================================
 # 按分辨率动态设定的【流畅播放速度】与【最低可播入围门槛】(单位: KB/s)
