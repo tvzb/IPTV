@@ -3,7 +3,7 @@
 IPTV 自动化五步工作流引擎 & 独立在线测速脚本
 
 核心特性：
-  1. 搜索词严格使用「更新 {月份} CCTV-6,http」与「更新 {月份} CCTV6,http」，支持自由选择采集页数 (1~5页)；
+  1. 搜索词优先检索月份更新标记，并扩展 CCTV/省级卫视中文名、拼音与文件类型，支持自由选择采集页数 (1~5页)；
   2. 按分辨率动态速度门槛过滤：
      - 1920x1080 (1080P)：流畅阈值 >= 650 KB/s，最低可播门槛 >= 350 KB/s（低于 350 KB/s 直接过滤，彻底消灭 0.10Mbps 黑屏转圈源）
      - 1280x720  (720P) ：流畅阈值 >= 420 KB/s，最低可播门槛 >= 240 KB/s
@@ -161,7 +161,7 @@ def stream_sort_key(item: Tuple[str, float, float, int, int, str]) -> Tuple[int,
     capped_speed = min(round(speed_kbs, 1), 2500.0)
     low_latency = -round(ttfb_ms, 0)
 
-    return (quality_tier, is_h264, res_height, capped_speed, low_latency)
+    return (quality_tier, capped_speed, low_latency, is_h264, res_height)
 
 
 def get_current_month_str() -> str:
@@ -276,7 +276,6 @@ def search_github_multi_page_previews(
     target_total = max_pages * RESULTS_PER_SEARCH_PAGE
 
     valid_results: List[Tuple[str, str, str, str, int]] = []
-    seen_repos: Set[str] = set()
     seen_urls: Set[str] = set()
 
     for page_idx in range(1, max_pages + 1):
@@ -309,14 +308,13 @@ def search_github_multi_page_previews(
                         commit_sha = item.get("commit_sha", "main")
                         if not repo_name or not file_path:
                             continue
-                        if repo_name in seen_repos:
-                            continue
-                        seen_repos.add(repo_name)
                         display_name = f"{repo_name} · {file_path}"
                         blob_html_url = f"{GH_HOST}/{repo_name}/blob/{commit_sha}/{file_path}"
                         raw_url = f"{GH_RAW_HOST}/{repo_name}/{commit_sha}/{file_path}"
                         snippets = item.get("hl_trunc_description", "") or ""
                         clean_snip = re.sub(r'<[^>]+>', '', snippets).strip()
+                        if raw_url in seen_urls:
+                            continue
                         seen_urls.add(raw_url)
                         valid_results.append((display_name, blob_html_url, raw_url, clean_snip, page_idx))
                         page_added += 1
@@ -336,8 +334,8 @@ def search_github_multi_page_previews(
             time.sleep(0.6)
 
     clean_q = query.replace(",", " ")
-    query_variants = [query, clean_q]
-    api_pages_needed = max(2, max_pages * 2)
+    query_variants = list(dict.fromkeys([query, clean_q]))
+    api_pages_needed = max(1, min(max_pages, 3))
 
     for q_try in query_variants:
         if len(valid_results) >= target_total:
@@ -356,28 +354,12 @@ def search_github_multi_page_previews(
                     if not items:
                         break
 
-                    repo_best_item: Dict[str, dict] = {}
-                    repo_order: List[str] = []
+                    # 一个仓库可能同时保存多个频道/日期文件，必须按文件 URL 去重，不能按仓库名去重。
                     for item in items:
                         repo_name = item.get("repository", {}).get("full_name", "")
                         file_path = item.get("path", "")
                         if not repo_name or not file_path:
                             continue
-                        if repo_name not in repo_best_item:
-                            repo_best_item[repo_name] = item
-                            repo_order.append(repo_name)
-                        else:
-                            old_path = repo_best_item[repo_name].get("path", "")
-                            m_new = re.search(r'(\d{4}-\d{2}-\d{2})', file_path)
-                            m_old = re.search(r'(\d{4}-\d{2}-\d{2})', old_path)
-                            if m_new and m_old and m_new.group(1) > m_old.group(1):
-                                repo_best_item[repo_name] = item
-
-                    for repo_name in repo_order:
-                        if repo_name in seen_repos:
-                            continue
-                        item = repo_best_item[repo_name]
-                        file_path = item.get("path", "")
                         display_name = f"{repo_name} · {file_path}"
 
                         text_matches = item.get("text_matches", [])
@@ -387,7 +369,6 @@ def search_github_multi_page_previews(
                         blob_html_url, raw_url = build_blob_and_raw_urls(item)
                         unique_key = raw_url or blob_html_url
                         if unique_key and unique_key not in seen_urls:
-                            seen_repos.add(repo_name)
                             seen_urls.add(unique_key)
                             logical_page = (len(valid_results) // RESULTS_PER_SEARCH_PAGE) + 1
                             valid_results.append((display_name, blob_html_url, raw_url, combined_preview, logical_page))
@@ -458,10 +439,20 @@ def step1_search_and_extract(target_channels: Set[str], search_pages: int = DEFA
     )
     print("=" * 86, flush=True)
 
-    # 严格只使用指定的两个搜索关键词，不搜索其它额外卫视关键词
+    # 多维检索：月份更新标记 + CCTV 多种写法 + 省级卫视常见中文名。
+    # GitHub code search 中 in:file / extension:txt|m3u 可减少 README 等噪声。
+    cctv_terms_a = ' OR '.join([f'"CCTV-{i}"' for i in range(1,10)] + [f'CCTV{i}' for i in range(1,10)])
+    cctv_terms_b = ' OR '.join([f'"CCTV-{i}"' for i in range(10,18)] + [f'CCTV{i}' for i in range(10,18)])
+    satellite_a = ' OR '.join(['"安徽卫视"','"北京卫视"','"重庆卫视"','"东南卫视"','"甘肃卫视"','"广东卫视"','"广西卫视"','"贵州卫视"','"海南卫视"','"河北卫视"','"河南卫视"','"黑龙江卫视"','"湖北卫视"','"湖南卫视"','"吉林卫视"','"江西卫视"'])
+    satellite_b = ' OR '.join(['"江苏卫视"','"辽宁卫视"','"内蒙古卫视"','"宁夏卫视"','"青海卫视"','"山东卫视"','"山西卫视"','"陕西卫视"','"深圳卫视"','"四川卫视"','"天津卫视"','"西藏卫视"','"新疆卫视"','"云南卫视"','"东方卫视"','"浙江卫视"'])
     exact_queries = [
-        f"更新 {curr_month} CCTV-6,http",
-        f"更新 {curr_month} CCTV6,http",
+        f'"更新 {curr_month}" "CCTV-6"',
+        f'"更新 {curr_month}" CCTV6',
+        f'({cctv_terms_a}) AND http in:file',
+        f'({cctv_terms_b}) AND http in:file',
+        f'({cctv_terms_a}) AND http extension:m3u',
+        f'({satellite_a}) AND http in:file',
+        f'({satellite_b}) AND http in:file',
     ]
 
     raw_extracted_records: List[Tuple[str, str]] = []
@@ -755,22 +746,13 @@ def recognize_channel_from_video_slice(
 
 
 def evaluate_domestic_ip_affinity(url: str, ttfb_ms: float) -> float:
-    lower_u = url.lower()
-    if any(proxy_kw in lower_u for proxy_kw in ("cors.isteed.cc", "ghproxy.", "workers.dev", "vercel.app", "netlify.app", "cloudflare")):
-        return 0.0
-
-    weight = 1.0
-    if any(k in lower_u for k in ("/tsfile/live/", "/pltv/", "chinamobile", "unicom", "telecom", "migu")):
-        weight *= 1.20
-    elif re.search(r'://\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', lower_u):
-        weight *= 1.15
-
-    if ttfb_ms < 400:
-        weight *= 1.08
-    elif ttfb_ms > 1800:
-        weight *= 0.78
-
-    return weight
+    # 云端无法判断国内运营商路由；不再按域名/伪装 IP 加分或一票否决。
+    # 仅保留首包响应的轻微惩罚，避免将它误当成国内实测结论。
+    if ttfb_ms > 3500:
+        return 0.82
+    if ttfb_ms > 1800:
+        return 0.92
+    return 1.0
 
 
 def test_single_stream_tvbox(

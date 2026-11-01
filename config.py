@@ -26,26 +26,19 @@ CUSTOM_WECHAT_LABEL = "微信：bofutz"
 
 # 仿真国内 TVBox (ExoPlayer / IjkPlayer) 标识与国内 IP 请求头
 TVBOX_USER_AGENT = "okhttp/3.15"
-DOMESTIC_SIM_IPS = [
-    "114.114.114.114",
-    "223.5.5.5",
-    "119.29.29.29",
-    "202.96.128.86",
-    "61.139.2.69",
-]
 
 # 搜索采集页数与每页条数配置（默认为 1 即首页；选 2 采集第 1、2 页，以此类推）
 DEFAULT_SEARCH_PAGES = int(os.environ.get("SEARCH_PAGES", "1") or "1")
 RESULTS_PER_SEARCH_PAGE = 20
 
 # 测速与并发参数
-REQUEST_TIMEOUT = 2.6
-CHUNK_DOWNLOAD_TIMEOUT = 3.2          # 稳态采样窗口 3.2 秒
-CHUNK_DOWNLOAD_MAX_BYTES = 1200 * 1024  # 采样上限 1.2MB，连续拉取多切片验证稳定性
-MIN_REQUIRED_BYTES = 240 * 1024       # 至少完整下载 240KB 真实视频流数据
-MAX_WORKERS = 36
-MAX_CANDIDATES_PER_CHANNEL = 65
-MAX_SAME_IP_PER_CHANNEL = 5
+REQUEST_TIMEOUT = 6.0
+CHUNK_DOWNLOAD_TIMEOUT = 9.0          # 云端初筛采样窗口；最终以家庭宽带实测为准
+CHUNK_DOWNLOAD_MAX_BYTES = 3 * 1024 * 1024  # 最多采样 3MB，减少瞬时突发速度误判
+MIN_REQUIRED_BYTES = 384 * 1024       # 至少取得 384KB 视频数据
+MAX_WORKERS = 8                       # 降低并发，避免测速任务互相争抢带宽
+MAX_CANDIDATES_PER_CHANNEL = 25
+MAX_SAME_IP_PER_CHANNEL = 3
 
 # ==============================================================================
 # 按分辨率动态设定的【流畅播放速度】与【最低可播入围门槛】(单位: KB/s)
@@ -241,15 +234,13 @@ def get_resolution_speed_thresholds(width: int, height: int) -> Tuple[float, flo
 
 
 def get_domestic_headers(extra_headers: Dict[str, str] = None) -> Dict[str, str]:
-    ip = DOMESTIC_SIM_IPS[0]
+    # 不伪造 X-Forwarded-For：它不会改变 GitHub Runner 的真实出口 IP，
+    # 反而可能触发 CDN/WAF 风控。保留接近常见 TVBox/OkHttp 的请求头。
     headers = {
         "User-Agent": TVBOX_USER_AGENT,
         "Accept": "*/*",
         "Accept-Language": "zh-CN,zh;q=0.9",
         "Connection": "keep-alive",
-        "X-Forwarded-For": ip,
-        "X-Real-IP": ip,
-        "Client-IP": ip,
     }
     if extra_headers:
         headers.update(extra_headers)
