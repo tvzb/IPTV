@@ -121,7 +121,6 @@ CCTV-7 国防军事,http://116.128.243.121:85/tsfile/live/0007_1.m3u8?key=txiptv
 CCTV-7 国防军事,http://144.123.165.186:9901/tsfile/live/0007_1.m3u8?key=txiptv
 CCTV-7 国防军事,http://59.39.89.130:60901/tsfile/live/0007_1.m3u8?key=txiptv&playlive=1&authid=0
 CCTV-7 国防军事,http://153.0.171.163:9901/tsfile/live/0007_1.m3u8?key=txiptv&playlive=1&authid=0
-CCTV-8 电视剧,http://107.150.52.50:82/live/cctv8k.m3u8
 CCTV-8 电视剧,http://60.16.0.36:5757/hls/9/index.m3u8
 CCTV-8 电视剧,http://219.147.245.238:25480/newlive/live/hls/9/live.m3u8
 CCTV-8 电视剧,http://112.92.129.95:9898/hls/26/index.m3u8
