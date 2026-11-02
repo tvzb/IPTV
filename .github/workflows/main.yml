@@ -45,8 +45,7 @@ jobs:
       TZ: Asia/Shanghai
       PYTHONUNBUFFERED: "1"
       RECENT_DAYS: ${{ inputs.recent_days || '30' }}
-      MAX_RECENT_REPOS: "30"
-      ENABLE_RECENT_REPO_SCAN: "true"
+      MAX_RECENT_REPOS: "60"
       ENABLE_LOGO_OCR: ${{ inputs.enable_logo_ocr || 'true' }}
       SEARCH_PAGES: ${{ inputs.search_pages || '3' }}
 
@@ -88,6 +87,7 @@ jobs:
               Path('live.m3u').write_text('#EXTM3U\n', encoding='utf-8')
           if not Path('raw_live.txt').exists():
               Path('raw_live.txt').write_text('', encoding='utf-8')
+          print('raw_live.txt bytes:', Path('raw_live.txt').stat().st_size)
           print('live.txt bytes:', Path('live.txt').stat().st_size)
           print('live.m3u bytes:', Path('live.m3u').stat().st_size)
           PY
@@ -102,9 +102,9 @@ jobs:
           path: |
             live.txt
             live.m3u
+            raw_live.txt
             raw_sources.txt
             raw_sources.m3u
-            raw_live.txt
             workflow_error.txt
 
       - name: Validate and commit playlist
@@ -121,11 +121,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -f live.txt live.m3u
+          [ ! -f raw_live.txt ] || git add -f raw_live.txt
           [ ! -f raw_sources.txt ] || git add -f raw_sources.txt
           [ ! -f raw_sources.m3u ] || git add -f raw_sources.m3u
           if git diff --cached --quiet; then
             echo "订阅内容无变化，无需提交。"
           else
             git commit -m "chore(iptv): refresh playlists $(date '+%Y-%m-%d %H:%M')"
+            # 远端可能在本次 Actions checkout 后被人工或其他工作流更新；先 rebase 再推送。
+            git fetch origin "${GITHUB_REF_NAME}"
+            git rebase "origin/${GITHUB_REF_NAME}"
             git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
