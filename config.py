@@ -18,18 +18,20 @@ from typing import Dict, List, Optional, Set, Tuple
 # 输出文件路径定义
 RAW_SOURCES_TXT = "raw_sources.txt"
 RAW_SOURCES_M3U = "raw_sources.m3u"
+RAW_LIVE_TXT = "raw_live.txt"  # 初步采集清洗后的完整候选池，不受测速配额限制
 OUTPUT_LIVE_TXT = "live.txt"
 OUTPUT_LIVE_M3U = "live.m3u"
 
 # 底部定制信息配置
 CUSTOM_WECHAT_LABEL = "微信：bofutz"
+CUSTOM_CHANNEL_LOGO_URL = "http://tvzb.github.io/iptv.png"
 
 # 仿真国内 TVBox (ExoPlayer / IjkPlayer) 标识与国内 IP 请求头
 TVBOX_USER_AGENT = "okhttp/3.15"
 
-# 搜索采集页数与每页条数配置（默认为 1 即首页；选 2 采集第 1、2 页，以此类推）
+# 搜索采集页数与每页条数配置（GitHub Code Search API 每页最多100条；默认为1页）
 DEFAULT_SEARCH_PAGES = int(os.environ.get("SEARCH_PAGES", "1") or "1")
-RESULTS_PER_SEARCH_PAGE = 20
+RESULTS_PER_SEARCH_PAGE = 100
 
 # 测速与并发参数
 REQUEST_TIMEOUT = 6.0

@@ -44,6 +44,8 @@ from config import (
     OUTPUT_LIVE_TXT,
     RAW_SOURCES_M3U,
     RAW_SOURCES_TXT,
+    RAW_LIVE_TXT,
+    CUSTOM_CHANNEL_LOGO_URL,
     REQUEST_TIMEOUT,
     RESULTS_PER_SEARCH_PAGE,
     SPEED_FLUENT_1080P,
@@ -161,7 +163,7 @@ def stream_sort_key(item: Tuple[str, float, float, int, int, str]) -> Tuple[int,
     capped_speed = min(round(speed_kbs, 1), 2500.0)
     low_latency = -round(ttfb_ms, 0)
 
-    return (quality_tier, capped_speed, low_latency, is_h264, res_height)
+    return (quality_tier, is_h264, res_height, capped_speed, low_latency)
 
 
 def get_current_month_str() -> str:
@@ -503,7 +505,7 @@ def discover_recent_github_playlist_files(target_channels: Set[str], days: int =
     seen_urls: Set[str] = set()
     checked = 0
     for full_name, branch, path in candidates:
-        if checked >= 100:
+        if checked >= 60:
             break
         checked += 1
         commits = github_api_get(f"{GH_API_HOST}/repos/{full_name}/commits", {"path": path, "per_page": "1"})
@@ -551,12 +553,9 @@ def step1_search_and_extract(target_channels: Set[str], search_pages: int = DEFA
     )
     print("=" * 86, flush=True)
 
-    # 主检索：最近 30 天真实更新过的播放列表文件（仓库活跃时间 + 文件最后提交时间双重核验）。
-    # 这一步不依赖“更新 2026-11”这样的文本标记，避免月初结果过少。
-    raw_extracted_records: List[Tuple[str, str]] = discover_recent_github_playlist_files(
-        target_channels, days=int(os.environ.get("RECENT_DAYS", "30")),
-        max_repositories=int(os.environ.get("MAX_RECENT_REPOS", "60"))
-    )
+    # 先执行低成本、命中明确的代码搜索；最近仓库扫描放在后面作为补充，
+    # 避免每次都先花大量 API 请求检查仓库树和文件提交记录。
+    raw_extracted_records: List[Tuple[str, str]] = []
 
     # 辅助检索：动态覆盖最近两个自然月份，兼容“更新 YYYY-MM / YYYY年M月 / 更新时间”等写法。
     # GitHub Code Search 结果用于补充，不作为唯一数据来源。
@@ -580,6 +579,9 @@ def step1_search_and_extract(target_channels: Set[str], search_pages: int = DEFA
     ]
     for month in month_values:
         exact_queries.extend([
+            # 兼容用户验证过的低频、短关键词检索写法
+            f'"更新 {month}" CCTV-6,http',
+            f'"更新 {month}" CCTV6,http',
             f'"更新 {month}" (CCTV OR CCTV6 OR "卫视")',
             f'"更新时间" "{month}" (CCTV OR "卫视")',
             f'"{month}" (CCTV OR "央视" OR "卫视") http in:file',
@@ -630,6 +632,15 @@ def step1_search_and_extract(target_channels: Set[str], search_pages: int = DEFA
 
         time.sleep(0.8)
 
+    # 补充检索：最近真实提交过播放列表的仓库。降低默认仓库数，避免它挤占主检索时间。
+    if os.environ.get("ENABLE_RECENT_REPO_SCAN", "true").strip().lower() not in ("0", "false", "no"):
+        recent_records = discover_recent_github_playlist_files(
+            target_channels,
+            days=int(os.environ.get("RECENT_DAYS", "30")),
+            max_repositories=int(os.environ.get("MAX_RECENT_REPOS", "30"))
+        )
+        raw_extracted_records.extend(recent_records)
+
     print("\n[*] 正在同步国内高活性直播源 Raw 补充矩阵...", flush=True)
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         future_map = {
@@ -652,14 +663,41 @@ def step1_search_and_extract(target_channels: Set[str], search_pages: int = DEFA
     return raw_extracted_records
 
 
+def save_raw_live_candidates(
+    full_pool: Dict[str, List[str]],
+    user_struct: Dict[str, List[str]],
+    target_channels: Set[str]
+):
+    """导出初步清洗后的完整候选池；此文件不执行测速配额截断。"""
+    lines: List[str] = []
+    total = 0
+    for group_name, channels in user_struct.items():
+        group_lines = [f"{group_name},#genre#"]
+        for display_ch in channels:
+            std_ch = normalize_channel_name(display_ch, target_channels) or display_ch
+            urls = full_pool.get(std_ch, [])
+            for url in urls:
+                group_lines.append(f"{display_ch},{url}")
+                total += 1
+        if len(group_lines) > 1:
+            lines.extend(group_lines)
+    with open(RAW_LIVE_TXT, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + ("\n" if lines else ""))
+    print(f"[✓] 完整初筛候选池已导出：{RAW_LIVE_TXT} | {total} 条（未执行频道/IP配额）", flush=True)
+
+
 def step2_clean_and_deduplicate(
     raw_records: List[Tuple[str, str]],
-    target_channels: Set[str]
+    target_channels: Set[str],
+    user_struct: Dict[str, List[str]]
 ) -> Tuple[Dict[str, List[str]], Set[str]]:
     print("\n" + "=" * 76, flush=True)
-    print("🧹 【第二步】清洗提取结果 ($尾缀剔除、拦截/rtp/与/udp/组播假源、HTTP严格去重与配额控制)", flush=True)
+    print("🧹 【第二步】全量清洗去重 -> 导出 raw_live.txt -> 再生成测速配额池", flush=True)
     print("=" * 76, flush=True)
 
+    # full_pool：保留所有清洗后唯一地址，专供人工审查与 IP/裂变规律分析。
+    full_pool: Dict[str, List[str]] = {ch: [] for ch in target_channels}
+    # cleaned_pool：仅此池执行测速配额，避免过量请求拖垮 GitHub Actions。
     cleaned_pool: Dict[str, List[str]] = {ch: [] for ch in target_channels}
     seen_urls_global: Set[str] = set()
     channel_ip_count: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
@@ -668,28 +706,24 @@ def step2_clean_and_deduplicate(
     blocked_junk_count = 0
     blocked_udpxy_count = 0
     channel_overflow_count = 0
+    ip_overflow_count = 0
 
     for raw_ch, raw_url in raw_records:
         raw_url = sanitize_url(raw_url)
         if "$" in raw_url:
             removed_suffix_count += 1
-
         raw_head = raw_url.split("$", 1)[0].strip()
         if is_blacklisted_url(raw_head):
             blocked_junk_count += 1
             continue
-
         clean_url = clean_stream_url(raw_url)
         if not clean_url or not clean_url.startswith(("http://", "https://")):
             continue
-
         if "/rtp/" in clean_url.lower() or "/udp/" in clean_url.lower():
             blocked_udpxy_count += 1
             continue
-
         if re.search(r'http://\[[0-9a-fA-F:]+\]', clean_url):
             continue
-
         std_ch = normalize_channel_name(raw_ch, target_channels)
         if std_ch not in target_channels:
             continue
@@ -697,26 +731,34 @@ def step2_clean_and_deduplicate(
         norm_u = clean_url.rstrip("/")
         if norm_u in seen_urls_global:
             continue
+        seen_urls_global.add(norm_u)
+        full_pool[std_ch].append(clean_url)
 
+        # 测速池的配额只在完整初筛文件导出之后应用。
         if len(cleaned_pool[std_ch]) >= MAX_CANDIDATES_PER_CHANNEL:
             channel_overflow_count += 1
             continue
-
         ip_port = extract_ip_port(clean_url)
         if ip_port and channel_ip_count[std_ch][ip_port] >= MAX_SAME_IP_PER_CHANNEL:
+            ip_overflow_count += 1
             continue
-
-        seen_urls_global.add(norm_u)
         cleaned_pool[std_ch].append(clean_url)
         if ip_port:
             channel_ip_count[std_ch][ip_port] += 1
         total_cleaned += 1
 
-    print(f"[✓] 第二步完成：", flush=True)
+    # 按官方频道顺序导出，且 raw_live 不受 60/5 配额影响。
+    save_raw_live_candidates(full_pool, user_struct, target_channels)
+    full_total = sum(len(v) for v in full_pool.values())
+
+    print("[✓] 第二步完成：", flush=True)
+    print(f"    - 总待测候选源: {full_total} 条（完整初筛池，尚未执行频道/IP配额）", flush=True)
     print(f"    - 已清除含 '$' 尾缀标记的地址: {removed_suffix_count} 处", flush=True)
-    print(f"    - 已彻底拦截两IP相连的 /rtp/ 与 /udp/ 组播无图像假源: {blocked_udpxy_count} 条", flush=True)
-    print(f"    - 已拦截纯音频广播/.swf/一次性Token假源: {blocked_junk_count} 条", flush=True)
-    print(f"    - 每个频道限额前 {MAX_CANDIDATES_PER_CHANNEL} 条 (同IP限{MAX_SAME_IP_PER_CHANNEL}条)，总待测候选源: {total_cleaned} 条", flush=True)
+    print(f"    - 已拦截 /rtp/ 与 /udp/ 组播地址: {blocked_udpxy_count} 条", flush=True)
+    print(f"    - 已拦截音频/网页/黑名单地址: {blocked_junk_count} 条", flush=True)
+    print(f"    - raw_live.txt：完整候选池，不限每频道数量、不限同IP数量", flush=True)
+    print(f"    - 实际进入测速池: {total_cleaned} 条（每频道{MAX_CANDIDATES_PER_CHANNEL}条，同IP每频道{MAX_SAME_IP_PER_CHANNEL}条）", flush=True)
+    print(f"    - 测速池配额截断: 频道超额 {channel_overflow_count} 条；同IP超额 {ip_overflow_count} 条", flush=True)
     return cleaned_pool, seen_urls_global
 
 
@@ -1302,7 +1344,7 @@ def step5_merge_sort_and_export(
         m3u_lines.extend([
             f'#EXTINF:-1 tvg-name="{date_only_str}" group-title="更新时间",{date_only_str}',
             first_valid_stream_url,
-            f'#EXTINF:-1 tvg-name="{CUSTOM_WECHAT_LABEL}" group-title="频道定制",{CUSTOM_WECHAT_LABEL}',
+            f'#EXTINF:-1 tvg-name="{CUSTOM_WECHAT_LABEL}" tvg-logo="{CUSTOM_CHANNEL_LOGO_URL}" group-title="频道定制",{CUSTOM_WECHAT_LABEL}',
             first_valid_stream_url,
         ])
 
@@ -1443,14 +1485,17 @@ def run_five_step_workflow(search_pages: int = DEFAULT_SEARCH_PAGES):
     )
 
     raw_records = step1_search_and_extract(target_channels, search_pages=search_pages)
-    cleaned_pool, all_seen_urls = step2_clean_and_deduplicate(raw_records, target_channels)
+    cleaned_pool, all_seen_urls = step2_clean_and_deduplicate(raw_records, target_channels, user_struct)
     save_intermediate_cleaned_pool(cleaned_pool, user_struct, target_channels)
 
-    tested_url_set: Set[str] = set(all_seen_urls)
-    for _, raw_u in raw_records:
-        cu = clean_stream_url(sanitize_url(raw_u))
-        if cu:
-            tested_url_set.add(cu.rstrip("/"))
+    # 只记录真正进入第三步测速池的地址。不能把 raw_live.txt 中未测速的长尾源
+    # 标记为“已测”，否则裂变阶段会错误跳过它们。
+    tested_url_set: Set[str] = {
+        clean_stream_url(u).rstrip("/")
+        for urls in cleaned_pool.values()
+        for u in urls
+        if clean_stream_url(u)
+    }
 
     step3_qualified = batch_evaluate_streams(
         cleaned_pool,
