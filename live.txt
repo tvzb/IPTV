@@ -201,7 +201,6 @@ CCTV-12 社会与法,http://221.221.137.78:8888/tsfile/live/0012_1.m3u8?key=txip
 CCTV-12 社会与法,http://221.7.49.226:50085/tsfile/live/0012_1.m3u8?key=txiptv
 CCTV-12 社会与法,http://116.128.243.121:85/tsfile/live/0012_1.m3u8?key=txiptv
 CCTV-12 社会与法,http://39.165.150.207:19901/tsfile/live/0012_1.m3u8?key=txiptv&playlive=1&authid=0
-CCTV-13 新闻,https://10.fast.hidns.vip/163189/cctv13
 CCTV-13 新闻,http://60.16.0.36:5757/hls/14/index.m3u8
 CCTV-13 新闻,http://221.7.49.226:50085/tsfile/live/0013_1.m3u8?key=txiptv
 CCTV-13 新闻,http://183.129.255.66:8480/hls/14/index.m3u8
