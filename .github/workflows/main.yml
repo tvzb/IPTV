@@ -18,7 +18,7 @@ on:
       enable_logo_ocr:
         description: "启用视频台标 OCR"
         required: false
-        default: "false"
+        default: "true"
         type: choice
         options: ["true", "false"]
   push:
@@ -45,8 +45,9 @@ jobs:
       TZ: Asia/Shanghai
       PYTHONUNBUFFERED: "1"
       RECENT_DAYS: ${{ inputs.recent_days || '30' }}
-      MAX_RECENT_REPOS: "60"
-      ENABLE_LOGO_OCR: ${{ inputs.enable_logo_ocr || 'false' }}
+      MAX_RECENT_REPOS: "30"
+      ENABLE_RECENT_REPO_SCAN: "true"
+      ENABLE_LOGO_OCR: ${{ inputs.enable_logo_ocr || 'true' }}
       SEARCH_PAGES: ${{ inputs.search_pages || '3' }}
 
     steps:
@@ -85,6 +86,8 @@ jobs:
               Path('live.txt').write_text('央视频道,#genre#\n卫视频道,#genre#\n更新时间,#genre#\n' + date + ',#genre#\n频道定制,#genre#\n微信：bofutz,#genre#\n', encoding='utf-8')
           if not Path('live.m3u').exists():
               Path('live.m3u').write_text('#EXTM3U\n', encoding='utf-8')
+          if not Path('raw_live.txt').exists():
+              Path('raw_live.txt').write_text('', encoding='utf-8')
           print('live.txt bytes:', Path('live.txt').stat().st_size)
           print('live.m3u bytes:', Path('live.m3u').stat().st_size)
           PY
@@ -101,6 +104,7 @@ jobs:
             live.m3u
             raw_sources.txt
             raw_sources.m3u
+            raw_live.txt
             workflow_error.txt
 
       - name: Validate and commit playlist
