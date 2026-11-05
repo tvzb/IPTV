@@ -4,19 +4,18 @@ on:
   workflow_dispatch:
     inputs:
       search_pages:
-        description: "GitHub 辅助代码搜索页数（最近30天仓库检索始终执行）"
+        description: "GitHub 搜索采集页数（默认采集前 2 页）"
         required: false
-        default: "3"
+        default: "2"
         type: choice
         options: ["1", "2", "3", "4", "5"]
-      recent_days:
-        description: "文件最近提交时间范围（天）"
+      search_month:
+        description: "GitHub 搜索更新月份标记"
         required: false
-        default: "30"
-        type: choice
-        options: ["14", "30", "45", "60"]
+        default: "2026-10"
+        type: string
       enable_logo_ocr:
-        description: "启用视频台标 OCR"
+        description: "启用视频台标 OCR 精准纠错"
         required: false
         default: "true"
         type: choice
@@ -44,10 +43,9 @@ jobs:
     env:
       TZ: Asia/Shanghai
       PYTHONUNBUFFERED: "1"
-      RECENT_DAYS: ${{ inputs.recent_days || '30' }}
-      MAX_RECENT_REPOS: "60"
+      SEARCH_MONTH: ${{ inputs.search_month || '2026-10' }}
       ENABLE_LOGO_OCR: ${{ inputs.enable_logo_ocr || 'true' }}
-      SEARCH_PAGES: ${{ inputs.search_pages || '3' }}
+      SEARCH_PAGES: ${{ inputs.search_pages || '2' }}
 
     steps:
       - name: Checkout
@@ -82,7 +80,7 @@ jobs:
           import datetime
           date = datetime.datetime.now().strftime('%Y-%m-%d')
           if not Path('live.txt').exists():
-              Path('live.txt').write_text('央视频道,#genre#\n卫视频道,#genre#\n更新时间,#genre#\n' + date + ',#genre#\n频道定制,#genre#\n微信：bofutz,#genre#\n', encoding='utf-8')
+              Path('live.txt').write_text('央视频道,#genre#\n卫视频道,#genre#\n电视频道,#genre#\n更新时间,#genre#\n' + date + ',#genre#\n频道定制,#genre#\n微信：bofutz,#genre#\n', encoding='utf-8')
           if not Path('live.m3u').exists():
               Path('live.m3u').write_text('#EXTM3U\n', encoding='utf-8')
           if not Path('raw_live.txt').exists():
@@ -128,7 +126,6 @@ jobs:
             echo "订阅内容无变化，无需提交。"
           else
             git commit -m "chore(iptv): refresh playlists $(date '+%Y-%m-%d %H:%M')"
-            # 远端可能在本次 Actions checkout 后被人工或其他工作流更新；先 rebase 再推送。
             git fetch origin "${GITHUB_REF_NAME}"
             git rebase "origin/${GITHUB_REF_NAME}"
             git push origin "HEAD:${GITHUB_REF_NAME}"
