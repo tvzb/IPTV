@@ -3,7 +3,10 @@
 IPTV 自动化五步工作流引擎 & 独立在线测速脚本
 
 核心特性：
-  1. GitHub 搜索严格分别输入“更新 2026-10 CCTV-6,http”和“更新 2026-10 CCTV6,http”，默认采集前 2 页搜索结果；
+  1. 严格按照 GitHub 网页搜索逻辑：
+     - 只分别输入“更新 2026-10 CCTV-6,http”和“更新 2026-10 CCTV6,http”进行搜索，默认采集前 2 页结果；
+     - 每个仓库只取搜索结果排在最前面的第 1 个有预览框的文件（与图一网页搜索完全一致，绝不进同一个仓库把历史备份文件翻个遍）；
+     - 依次打开有预览框的结果 -> 点击“Raw”采集打开的纯文本内容；搜索结果中没有的，绝不擅自打开采集！
   2. 按分辨率动态速度门槛过滤：
      - 1920x1080 (1080P)：流畅阈值 >= 650 KB/s，最低可播门槛 >= 350 KB/s
      - 1280x720  (720P) ：流畅阈值 >= 420 KB/s，最低可播门槛 >= 240 KB/s
@@ -11,8 +14,8 @@ IPTV 自动化五步工作流引擎 & 独立在线测速脚本
   3. 同一频道严格按四档优先级排序：
      ① 高清且流畅 (Tier 4) -> ② 流畅标清 (Tier 3) -> ③ 高清卡顿备用 (Tier 2) -> ④ 标清卡顿备用 (Tier 1)
   4. 测速切片视频画面台标 OCR 精准识别：
-     - 彻底杜绝 CCTV-8K 误判为 CCTV-8、CCTV-4K 误判为 CCTV-4（识别到 4K/8K 非目标频道直接剔除）；
-     - 精准区分 CCTV-4 中文国际、CCTV-4 中文国际 美洲、CCTV-4 中文国际  欧洲、CCTV-5+ 体育赛事及 CHC 电影频道，自动纠正错误台名；
+     - 不采集 CCTV-8K 和 CCTV-4K（通过文本过滤 + 分辨率过滤 + 台标 OCR 识别三重拦截，绝不误判为 CCTV-8 或 CCTV-4）；
+     - 精准区分 CCTV-4 中文国际、CCTV-4 中文国际美洲、CCTV-4 中文国际欧洲、CCTV-5+ 体育赛事及 CHC 电影频道，自动改正错误台名；
   5. 输出菜单固定为：央视频道 -> 卫视频道 -> 电视频道 -> 更新时间 -> 频道定制。
 """
 import argparse
@@ -101,19 +104,6 @@ GH_HOST = "https://" + "github.com"
 GH_API_HOST = "https://" + "api.github.com"
 GH_RAW_HOST = "https://" + "raw.githubusercontent.com"
 
-FALLBACK_GITHUB_MATRIX = [
-    f"{GH_RAW_HOST}/Guovin/iptv-api/gd/output/result.txt",
-    f"{GH_RAW_HOST}/iptvjs/iptv-api/main/output/user_result.txt",
-    f"{GH_RAW_HOST}/cymz6/AutoIPTV-Hotel/main/lives.txt",
-    f"{GH_RAW_HOST}/Ftindy/IPTV-URL/main/output/result.txt",
-    f"{GH_RAW_HOST}/vbskycn/iptv/master/tv/hd.txt",
-    f"{GH_RAW_HOST}/fanmingming/live/main/tv/m3u/ipv4.m3u",
-    f"{GH_RAW_HOST}/yuanzl77/IPTV/main/live.txt",
-    f"{GH_RAW_HOST}/suxuang/myIPTV/main/ipv4.m3u",
-    f"{GH_RAW_HOST}/kimwang1978/collect-tv-txt/main/merged_output.txt",
-    f"{GH_RAW_HOST}/Kimentanm/aptv/master/m3u/iptv.m3u",
-]
-
 
 def sanitize_url(u: str) -> str:
     if not u:
@@ -192,6 +182,7 @@ def build_blob_and_raw_urls(item: dict) -> Tuple[str, str]:
 
 
 def open_preview_and_click_raw(blob_html_url: str, raw_url: str) -> Tuple[str, str]:
+    """打开搜索结果文件页 -> 点击 Raw 获取纯文本内容"""
     blob_html_url = sanitize_url(blob_html_url)
     raw_url = sanitize_url(raw_url)
 
@@ -215,51 +206,26 @@ def open_preview_and_click_raw(blob_html_url: str, raw_url: str) -> Tuple[str, s
         except Exception:
             continue
 
-    if blob_html_url:
-        try:
-            r_blob = requests.get(blob_html_url, headers=get_github_web_headers(), timeout=10)
-            if r_blob.status_code == 200:
-                text_body = r_blob.text
-                try:
-                    data = r_blob.json()
-                    raw_lines = (
-                        data.get("payload", {}).get("blob", {}).get("rawLines")
-                        or data.get("blob", {}).get("rawLines")
-                    )
-                    if isinstance(raw_lines, list) and len(raw_lines) > 0:
-                        return "\n".join(raw_lines), "文件页文字框纯文本 (rawLines)"
-                except Exception:
-                    pass
-
-                m_script = re.search(
-                    r'<script[^>]*data-target="react-app\.embeddedData"[^>]*>(.*?)</script>',
-                    text_body,
-                    re.DOTALL | re.IGNORECASE
-                )
-                if m_script:
-                    try:
-                        embedded_json = json.loads(m_script.group(1).strip())
-                        raw_lines = embedded_json.get("payload", {}).get("blob", {}).get("rawLines")
-                        if isinstance(raw_lines, list) and len(raw_lines) > 0:
-                            return "\n".join(raw_lines), "文件页文字框内嵌数据"
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-
-    return "", "未能读取"
+    return "", "未能读取 Raw 纯文本"
 
 
 def search_github_multi_page_previews(
     query: str,
     max_pages: int = DEFAULT_SEARCH_PAGES
 ) -> List[Tuple[str, str, str, str, int]]:
+    """
+    严格对齐 GitHub 网页搜索页面（如图一）：
+    1. 只取带有代码预览框内容（snippets / text_matches 非空）的搜索结果；
+    2. 按仓库去重（seen_repos）：同一个仓库只取搜索结果排在最前面的第 1 个文件，
+       绝不把 hebijunge/tvbox-config 等仓库里的十几个历史备份文件重复塞满前 2 页！
+    """
     max_pages = max(1, min(int(max_pages), 10))
     target_total = max_pages * RESULTS_PER_SEARCH_PAGE
 
     valid_results: List[Tuple[str, str, str, str, int]] = []
-    seen_urls: Set[str] = set()
+    seen_repos: Set[str] = set()
 
+    # 优先通过 GitHub Web Search 接口获取搜索页
     for page_idx in range(1, max_pages + 1):
         try:
             web_search_url = sanitize_url(f"{GH_HOST}/search")
@@ -290,19 +256,29 @@ def search_github_multi_page_previews(
                         commit_sha = item.get("commit_sha", "main")
                         if not repo_name or not file_path:
                             continue
+
+                        # 同一个仓库只取搜索结果中的第 1 条，与网页端搜索列表完全一致
+                        if repo_name in seen_repos:
+                            continue
+
+                        snippets = item.get("hl_trunc_description", "") or ""
+                        if not snippets and isinstance(item.get("snippets"), list):
+                            snippets = "\n".join(s.get("lines", "") for s in item.get("snippets", []) if isinstance(s, dict))
+                        clean_snip = re.sub(r'<[^>]+>', '', snippets).strip()
+
+                        # 必须有预览内容才采集
+                        if not clean_snip:
+                            continue
+
+                        seen_repos.add(repo_name)
                         display_name = f"{repo_name} · {file_path}"
                         blob_html_url = f"{GH_HOST}/{repo_name}/blob/{commit_sha}/{file_path}"
                         raw_url = f"{GH_RAW_HOST}/{repo_name}/{commit_sha}/{file_path}"
-                        snippets = item.get("hl_trunc_description", "") or ""
-                        clean_snip = re.sub(r'<[^>]+>', '', snippets).strip()
-                        if raw_url in seen_urls:
-                            continue
-                        seen_urls.add(raw_url)
                         valid_results.append((display_name, blob_html_url, raw_url, clean_snip, page_idx))
                         page_added += 1
                         if len(valid_results) >= target_total:
                             break
-                    print(f"  [*] 网页端搜索第 {page_idx}/{max_pages} 页：获取到 {page_added} 条结果", flush=True)
+                    print(f"  [*] 网页端搜索第 {page_idx}/{max_pages} 页：获取到 {page_added} 个带预览框的仓库结果", flush=True)
                 else:
                     break
             else:
@@ -315,6 +291,7 @@ def search_github_multi_page_previews(
         if page_idx < max_pages:
             time.sleep(0.6)
 
+    # 当 GitHub Actions 环境网页端未登录受限时，使用 GitHub Code Search API（同样严格按 repo_name 去重且必须有 text_matches 预览框）
     clean_q = query.replace(",", " ")
     query_variants = list(dict.fromkeys([query, clean_q]))
 
@@ -322,10 +299,11 @@ def search_github_multi_page_previews(
         if len(valid_results) >= target_total:
             break
         api_url = sanitize_url(f"{GH_API_HOST}/search/code")
-        for api_page in range(1, max_pages + 1):
+        # 因为 API 可能会在一个仓库下返回多条历史文件，多翻几页 API 以凑满前 max_pages 页的不同仓库结果
+        for api_page in range(1, max_pages + 3):
             params = {
                 "q": q_try,
-                "per_page": str(RESULTS_PER_SEARCH_PAGE),
+                "per_page": "100",
                 "page": str(api_page),
             }
             try:
@@ -340,22 +318,29 @@ def search_github_multi_page_previews(
                         file_path = item.get("path", "")
                         if not repo_name or not file_path:
                             continue
-                        display_name = f"{repo_name} · {file_path}"
+
+                        # 【核心修复】每个仓库只保留搜索排最前面的第 1 个文件！
+                        # 彻底解决 hebijunge/tvbox-config 霸占前 15 条的问题
+                        if repo_name in seen_repos:
+                            continue
 
                         text_matches = item.get("text_matches", [])
                         fragments = [tm.get("fragment", "").strip() for tm in text_matches if tm.get("fragment", "").strip()]
-                        combined_preview = "\n".join(fragments)
+                        combined_preview = "\n".join(fragments).strip()
 
+                        # 没有预览内容的条目直接跳过，绝不盲目打开
+                        if not combined_preview:
+                            continue
+
+                        seen_repos.add(repo_name)
+                        display_name = f"{repo_name} · {file_path}"
                         blob_html_url, raw_url = build_blob_and_raw_urls(item)
-                        unique_key = raw_url or blob_html_url
-                        if unique_key and unique_key not in seen_urls:
-                            seen_urls.add(unique_key)
-                            logical_page = (len(valid_results) // RESULTS_PER_SEARCH_PAGE) + 1
-                            valid_results.append((display_name, blob_html_url, raw_url, combined_preview, logical_page))
-                            if len(valid_results) >= target_total:
-                                break
+                        logical_page = (len(valid_results) // RESULTS_PER_SEARCH_PAGE) + 1
+                        valid_results.append((display_name, blob_html_url, raw_url, combined_preview, logical_page))
+                        if len(valid_results) >= target_total:
+                            break
 
-                    if len(valid_results) >= target_total or len(items) < RESULTS_PER_SEARCH_PAGE:
+                    if len(valid_results) >= target_total or len(items) < 100:
                         break
                 elif resp.status_code in (403, 429):
                     print(f"  [!] GitHub Search API 触发限流 ({resp.status_code})，稍作等待...", flush=True)
@@ -368,7 +353,7 @@ def search_github_multi_page_previews(
                 break
 
     print(
-        f"  [*] 搜索完成：设定采集前 {max_pages} 页（目标 {target_total} 条），实际获取 {len(valid_results)} 条独立文件结果",
+        f"  [*] 搜索完成：设定采集前 {max_pages} 页（目标 {target_total} 条），实际获取 {len(valid_results)} 个带预览框的独立仓库结果",
         flush=True
     )
     return valid_results
@@ -410,10 +395,16 @@ def extract_raw_entries_from_text(content: str) -> List[Tuple[str, str]]:
 
 
 def step1_search_and_extract(target_channels: Set[str], search_pages: int = DEFAULT_SEARCH_PAGES) -> List[Tuple[str, str]]:
+    """
+    第一步：严格只从搜索结果中采集内容！
+    - 分别输入 "更新 2026-10 CCTV-6,http" 和 "更新 2026-10 CCTV6,http"
+    - 依次打开有预览框的搜索结果，进去点击 Raw 采集纯文本内容
+    - 搜索结果中没有的，绝不擅自打开采集！
+    """
     search_pages = max(1, int(search_pages))
     print("=" * 86, flush=True)
     print(
-        f"🚀 【第一步】按页采集 GitHub 搜索结果 (默认采集前 {search_pages} 页，每页 {RESULTS_PER_SEARCH_PAGE} 条) | 目标搜索词月份: {SEARCH_MONTH_STR}",
+        f"🚀 【第一步】直接从 GitHub 搜索结果采集 (采集前 {search_pages} 页，每页 {RESULTS_PER_SEARCH_PAGE} 条，仅打开有预览的结果点击 Raw)",
         flush=True
     )
     print("=" * 86, flush=True)
@@ -421,10 +412,9 @@ def step1_search_and_extract(target_channels: Set[str], search_pages: int = DEFA
     raw_extracted_records: List[Tuple[str, str]] = []
     visited_files: Set[str] = set()
 
-    # 严格只分别输入 "更新 2026-10 CCTV-6,http" 和 "更新 2026-10 CCTV6,http" 进行搜索
     for q in GITHUB_SEARCH_QUERIES:
         print(
-            f"\n[*] 正在搜索关键词: 「{q}」 (采集前 {search_pages} 页，每页 {RESULTS_PER_SEARCH_PAGE} 条搜索结果)...",
+            f"\n[*] 正在搜索关键词: 「{q}」 (采集前 {search_pages} 页)...",
             flush=True
         )
         search_items = search_github_multi_page_previews(q, max_pages=search_pages)
@@ -434,16 +424,19 @@ def step1_search_and_extract(target_channels: Set[str], search_pages: int = DEFA
 
         total_items = len(search_items)
         for idx, (display_name, blob_html_url, raw_url, preview_text, page_no) in enumerate(search_items, 1):
+            # 没有预览内容的直接跳过，绝不打开
+            if not preview_text or not preview_text.strip():
+                continue
+
             unique_key = raw_url or blob_html_url
             if unique_key in visited_files:
-                print(f"  -> [第{page_no}页 | {idx}/{total_items}] 已采集过该仓库文件，跳过重复项: {display_name}", flush=True)
+                print(f"  -> [第{page_no}页 | {idx}/{total_items}] 已采集过该搜索结果文件，跳过重复项: {display_name}", flush=True)
                 continue
             visited_files.add(unique_key)
 
-            preview_first_line = preview_text.splitlines()[0][:65] if preview_text else ""
-            print(f"  -> [第{page_no}页 | {idx}/{total_items}] 打开预览框: {display_name}", flush=True)
-            if preview_first_line:
-                print(f"     [预览框内容] {preview_first_line}...", flush=True)
+            preview_first_line = preview_text.splitlines()[0][:65]
+            print(f"  -> [第{page_no}页 | {idx}/{total_items}] 打开有预览的搜索结果: {display_name}", flush=True)
+            print(f"     [预览框内容] {preview_first_line}...", flush=True)
 
             full_text, source_mode = open_preview_and_click_raw(blob_html_url, raw_url)
             matched_in_file = 0
@@ -455,33 +448,13 @@ def step1_search_and_extract(target_channels: Set[str], search_pages: int = DEFA
                         raw_extracted_records.append((norm_ch, raw_url_str))
                         matched_in_file += 1
                 print(f"     [✓] {source_mode} -> 成功采集目标频道直播源: {matched_in_file} 条", flush=True)
-            elif preview_text:
-                for raw_ch, raw_url_str in extract_raw_entries_from_text(preview_text):
-                    norm_ch = normalize_channel_name(raw_ch, target_channels)
-                    if norm_ch in target_channels:
-                        raw_extracted_records.append((norm_ch, raw_url_str))
-                        matched_in_file += 1
-                print(f"     [!] Raw 页面响应超时，已从预览框采集目标频道直播源: {matched_in_file} 条", flush=True)
+            else:
+                print(f"     [!] 未能打开 Raw 纯文本，跳过该条结果", flush=True)
 
         time.sleep(0.8)
 
-    print("\n[*] 正在同步国内高活性直播源 Raw 补充矩阵...", flush=True)
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        future_map = {
-            executor.submit(open_preview_and_click_raw, "", sanitize_url(u)): sanitize_url(u)
-            for u in FALLBACK_GITHUB_MATRIX
-            if sanitize_url(u) not in visited_files
-        }
-        for fut in as_completed(future_map):
-            content, _ = fut.result()
-            if content:
-                for raw_ch, raw_url_str in extract_raw_entries_from_text(content):
-                    norm_ch = normalize_channel_name(raw_ch, target_channels)
-                    if norm_ch in target_channels:
-                        raw_extracted_records.append((norm_ch, raw_url_str))
-
     print(
-        f"\n[✓] 第一步完成：共采集前 {search_pages} 页（合计打开 {len(visited_files)} 个不同仓库文件），提取原始直播源 {len(raw_extracted_records)} 条。",
+        f"\n[✓] 第一步完成：严格从前 {search_pages} 页搜索结果中打开 {len(visited_files)} 个有预览的文件并点击 Raw，共提取目标频道直播源 {len(raw_extracted_records)} 条。",
         flush=True
     )
     return raw_extracted_records
@@ -492,7 +465,7 @@ def step2_clean_and_deduplicate(
     target_channels: Set[str]
 ) -> Tuple[Dict[str, List[str]], Set[str]]:
     print("\n" + "=" * 76, flush=True)
-    print("🧹 【第二步】清洗提取结果 ($尾缀剔除、拦截/rtp/与/udp/组播假源、HTTP严格去重与4K/8K防串台)", flush=True)
+    print("🧹 【第二步】清洗提取结果 ($尾缀剔除、拦截/rtp/与/udp/组播假源、过滤4K/8K、HTTP严格去重)", flush=True)
     print("=" * 76, flush=True)
 
     cleaned_pool: Dict[str, List[str]] = {ch: [] for ch in target_channels}
@@ -599,6 +572,10 @@ def verify_video_stream_with_ffprobe(raw_bytes: bytes) -> Tuple[bool, int, int, 
         if width < 640 or height < 360:
             return False, width, height, f"分辨率过低({width}x{height})", ""
 
+        # 不采集 4K / 8K 超高清视频流 (width >= 3800)，防止混入 CCTV-4 或 CCTV-8
+        if width >= 3800 or height >= 2000:
+            return False, width, height, f"过滤4K/8K超高清频道({width}x{height})", ""
+
         if pix_fmt and ("10le" in pix_fmt or "422" in pix_fmt or "444" in pix_fmt):
             return False, width, height, f"盒子不兼容像素格式({pix_fmt})", ""
 
@@ -633,9 +610,8 @@ def recognize_channel_from_video_slice(
 ) -> Optional[str]:
     """
     截取视频顶部画面（左上方 + 右上方台标区）并进行多阈值放大 OCR：
-    - 重点汇总所有文字片段再交由 parse_ocr_text_to_channel 判定，
-      确保「CCTV-4 中文国际  欧洲 / 美洲」、「CCTV-5+ 体育赛事」、「CCTV-8K 超高清」、「CCTV-4K 超高清」
-      能够结合主台标与下方小字完整、准确识别！
+    - 优先将识别出的多行文字拼接（例如主台标 "CCTV 4" 与下方小字 "中文国际欧洲"，或 "CCTV 8K 超高清"），
+      确保准确识别出 CCTV-4 中文国际美洲 / CCTV-4 中文国际欧洲 / CCTV-5+ 体育赛事，并彻底拦截 CCTV-4K / CCTV-8K！
     """
     if not ENABLE_LOGO_OCR:
         return None
@@ -682,7 +658,6 @@ def recognize_channel_from_video_slice(
                             if text_piece:
                                 collected_texts.append(text_piece)
 
-                    # 先用合并后的完整台标文本（如 "CCTV 4 中文国际 欧洲" 或 "CCTV 8K 超高清"）整体匹配，防止丢掉小字后缀
                     if collected_texts:
                         combined_ocr = " ".join(collected_texts)
                         matched_ch = parse_ocr_text_to_channel(combined_ocr, target_channels)
@@ -869,9 +844,8 @@ def test_single_stream_tvbox(
             width, height = m3u8_res_hint
             video_tag = f"{width}x{height} (H264)"
 
-        # 若分辨率本身达到 4K/8K 超高清 (width >= 3800)，且当前目标列表不含 4K/8K 频道，直接拦截防误归入 CCTV-4/CCTV-8
-        if width >= 3800 and target_channels and ("CCTV-4K 超高清" not in target_channels and "CCTV-8K 超高清" not in target_channels):
-            return channel_name, channel_name, clean_url, 0.0, ttfb_ms, width, height, False, f"剔除4K/8K超高清防串台({width}x{height})"
+        if width >= 3800 or height >= 2000:
+            return channel_name, channel_name, clean_url, 0.0, ttfb_ms, width, height, False, f"过滤4K/8K超高清频道({width}x{height})"
 
         duration = max(time.time() - download_start, 0.12)
         avg_speed_kbs = (bytes_received / 1024.0) / duration
@@ -900,12 +874,11 @@ def test_single_stream_tvbox(
         _, tier_label = classify_stream_quality_group(width, height, effective_speed_kbs, video_tag)
         tagged_vtag = f"{video_tag} [{tier_label}]"
 
-        # 识别切片画面台标 Logo，自动纠正错位频道或拦截 4K/8K 假冒频道
+        # 识别切片画面台标 Logo，自动纠正错误台名并彻底剔除 CCTV-4K / CCTV-8K
         final_channel_name = channel_name
         detected_ch = recognize_channel_from_video_slice(raw_bytes, service_hint=service_hint, target_channels=target_channels)
         if detected_ch:
-            # 若台标识别为 CCTV-4K / CCTV-8K 等不在目标列表中的频道，直接淘汰，绝不混入 CCTV-4 或 CCTV-8
-            if detected_ch in ("CCTV-4K 超高清", "CCTV-8K 超高清") and (not target_channels or detected_ch not in target_channels):
+            if detected_ch == "__BLOCK_4K_8K__":
                 return (
                     channel_name,
                     channel_name,
@@ -915,7 +888,7 @@ def test_single_stream_tvbox(
                     width,
                     height,
                     False,
-                    f"台标实为{detected_ch}(已拦截防串台)"
+                    "台标识别为CCTV-4K/8K(不采集已剔除)"
                 )
 
             norm_detected = normalize_channel_name(detected_ch, target_channels)
@@ -942,7 +915,7 @@ def batch_evaluate_streams(
         for u in urls:
             tasks.append((ch, u))
 
-    ocr_status = "已开启 (RapidOCR 台标完整识别 & 4K/8K/欧美版防串台纠错)" if (ENABLE_LOGO_OCR and _OCR_AVAILABLE) else "仅 TS 元数据校验"
+    ocr_status = "已开启 (RapidOCR 画面台标精准识别 + 剔除4K/8K + 自动纠正频道名称)" if (ENABLE_LOGO_OCR and _OCR_AVAILABLE) else "仅 TS 元数据校验"
     print("\n" + "=" * 90, flush=True)
     print(f"⚡ {stage_title}", flush=True)
     print(
@@ -1080,7 +1053,7 @@ def step5_merge_sort_and_export(
     print("\n" + "=" * 92, flush=True)
     print("🏆 【第五步(2/2)】汇总合并达标源，按【1.高清且流畅 -> 2.流畅标清 -> 3.高清卡顿 -> 4.标清卡顿】排序输出", flush=True)
     print(f"   - 第三步初次测速达标源: {step3_count} 条 | 第五步裂变新源二次测速新增达标源: {step5_count} 条", flush=True)
-    print(f"{'频道名称':<22} | {'有效源数':<8} | {'首选规格与档位':<28} | {'稳态实测速度':<13} | {'首包延迟':<10}", flush=True)
+    print(f"{'频道名称':<20} | {'有效源数':<8} | {'首选规格与档位':<28} | {'稳态实测速度':<13} | {'首包延迟':<10}", flush=True)
     print("-" * 92, flush=True)
 
     txt_lines: List[str] = []
@@ -1126,7 +1099,7 @@ def step5_merge_sort_and_export(
                 if not first_valid_stream_url:
                     first_valid_stream_url = top_url
                 print(
-                    f"{display_ch:<22} | {len(final_streams):<8} | {top_vtag:<28} | {top_spd:>7.1f} KB/s | {top_ttfb:>6.0f} ms",
+                    f"{display_ch:<20} | {len(final_streams):<8} | {top_vtag:<28} | {top_spd:>7.1f} KB/s | {top_ttfb:>6.0f} ms",
                     flush=True
                 )
                 for url, spd, ttfb, w, h, vtag in final_streams:
@@ -1134,7 +1107,7 @@ def step5_merge_sort_and_export(
                     m3u_lines.append(f'#EXTINF:-1 tvg-name="{std_ch}" group-title="{group_name}",{display_ch}')
                     m3u_lines.append(url)
             else:
-                print(f"{display_ch:<22} | {'0 (无达标)':<8} | {'--':<28} | {'--':>11} | {'--':>9}", flush=True)
+                print(f"{display_ch:<20} | {'0 (无达标)':<8} | {'--':<28} | {'--':>11} | {'--':>9}", flush=True)
 
         if group_has_items:
             txt_lines.extend(group_txt)
@@ -1194,7 +1167,9 @@ def run_standalone_speedtest_mode(input_file: str):
         clean_u = clean_stream_url(sanitize_url(raw_u))
         if not clean_u:
             continue
-        norm_ch = normalize_channel_name(raw_ch, target_channels) or raw_ch
+        norm_ch = normalize_channel_name(raw_ch, target_channels)
+        if not norm_ch:
+            continue
         norm_u = clean_u.rstrip("/")
         if norm_u not in seen_urls:
             seen_urls.add(norm_u)
@@ -1202,11 +1177,11 @@ def run_standalone_speedtest_mode(input_file: str):
                 channel_order.append(norm_ch)
             pool[norm_ch].append(clean_u)
 
-    print(f"[*] 原始提取 {len(raw_entries)} 条，HTTP 严格去重后共 {len(seen_urls)} 条唯一地址。", flush=True)
+    print(f"[*] 原始提取 {len(raw_entries)} 条，过滤 4K/8K 与 HTTP 严格去重后共 {len(seen_urls)} 条唯一地址。", flush=True)
 
     qualified = batch_evaluate_streams(
         pool,
-        stage_title="【在线去重测速】分辨率动态速度门槛 & 左上角台标 OCR 自动纠错",
+        stage_title="【在线去重测速】分辨率动态速度门槛 & 台标 OCR 自动纠错",
         target_channels=target_channels
     )
 
@@ -1360,10 +1335,4 @@ def main():
         try:
             run_five_step_workflow(search_pages=effective_pages)
         except Exception as exc:
-            print(f"[FATAL] 工作流异常：{type(exc).__name__}: {exc}", flush=True)
-            write_emergency_outputs(str(exc))
-            raise
-
-
-if __name__ == "__main__":
-    main()
+            print(f"[FATAL] 工作流异常：{type(exc).__name
