@@ -23,7 +23,7 @@ OUTPUT_LIVE_TXT = "live.txt"
 OUTPUT_LIVE_M3U = "live.m3u"
 
 # 底部定制信息配置
-CUSTOM_WECHAT_LABEL = "http://tvzb.github.io"
+CUSTOM_WECHAT_LABEL = "https://tvzb.github.io"
 
 # 仿真国内 TVBox (ExoPlayer / IjkPlayer) 标识与国内 IP 请求头
 TVBOX_USER_AGENT = "okhttp/3.15"
