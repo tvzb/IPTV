@@ -2,8 +2,9 @@
 """
 IPTV 核心配置模块：
 - 直接采用本模块内置的官方频道名称与顺序定义：
-  1. 央视频道：CCTV 1~17 综合/专业频道 (严格排除 CCTV-5+)
+  1. 央视频道：CCTV 1~17 + CCTV-4 美洲/欧洲 + CCTV-5+ 体育赛事
   2. 卫视频道：30 个省级卫视频道 (7个置顶优先卫视 + 23个按首字拼音升序排列卫视，福建统一命名为东南卫视)
+  3. 电视频道：CHC家庭影院、CHC动作电影、CHC高清电影、经典电影
 - 分辨率差异化速度门槛与四档排序规则：
   - 1920x1080 (1080P)：流畅播放要求 >= 650 KB/s，最低入围门槛 >= 350 KB/s
   - 1280x720  (720P) ：流畅播放要求 >= 420 KB/s，最低入围门槛 >= 240 KB/s
@@ -27,14 +28,21 @@ CUSTOM_WECHAT_LABEL = "微信：bofutz"
 # 仿真国内 TVBox (ExoPlayer / IjkPlayer) 标识与国内 IP 请求头
 TVBOX_USER_AGENT = "okhttp/3.15"
 
-# 搜索采集页数与每页条数配置（默认为 1 即首页；选 2 采集第 1、2 页，以此类推）
-DEFAULT_SEARCH_PAGES = int(os.environ.get("SEARCH_PAGES", "1") or "1")
+# 搜索采集页数与每页条数配置（默认采集前 2 页）
+DEFAULT_SEARCH_PAGES = int(os.environ.get("SEARCH_PAGES", "2") or "2")
 RESULTS_PER_SEARCH_PAGE = 20
+
+# GitHub 固定搜索关键词配置（默认搜索 2026-10 更新内容）
+SEARCH_MONTH_STR = os.environ.get("SEARCH_MONTH", "2026-10").strip() or "2026-10"
+GITHUB_SEARCH_QUERIES = [
+    f"更新 {SEARCH_MONTH_STR} CCTV-6,http",
+    f"更新 {SEARCH_MONTH_STR} CCTV6,http",
+]
 
 # 测速与并发参数
 REQUEST_TIMEOUT = 6.0
 CHUNK_DOWNLOAD_TIMEOUT = 12.0          # 云端初筛采样窗口；最终以家庭宽带实测为准
-CHUNK_DOWNLOAD_MAX_BYTES = 4 * 1024 * 1024  # 最多采样 3MB，减少瞬时突发速度误判
+CHUNK_DOWNLOAD_MAX_BYTES = 4 * 1024 * 1024  # 最多采样 4MB，减少瞬时突发速度误判
 MIN_REQUIRED_BYTES = 384 * 1024       # 至少取得 384KB 视频数据
 MAX_WORKERS = 8                       # 降低并发，避免测速任务互相争抢带宽
 MAX_CANDIDATES_PER_CHANNEL = 60
@@ -62,13 +70,16 @@ MIN_SPEED_KBS = SPEED_MIN_SD
 # 是否开启测速时视频画面左上角台标 OCR 识别自动纠错
 ENABLE_LOGO_OCR = os.environ.get("ENABLE_LOGO_OCR", "true").strip().lower() not in ("false", "0", "no")
 
-# 官方默认央视频道（CCTV 1~17，严格排除 CCTV-5+）
+# 官方默认央视频道（CCTV 1~17 + CCTV-4 美洲/欧洲 + CCTV-5+ 体育赛事）
 DEFAULT_CCTV_CHANNELS = [
     "CCTV-1 综合", "CCTV-2 财经", "CCTV-3 综艺", "CCTV-4 中文国际",
     "CCTV-5 体育", "CCTV-6 电影", "CCTV-7 国防军事", "CCTV-8 电视剧",
     "CCTV-9 纪录", "CCTV-10 科教", "CCTV-11 戏曲", "CCTV-12 社会与法",
     "CCTV-13 新闻", "CCTV-14 少儿", "CCTV-15 音乐", "CCTV-16 奥林匹克",
     "CCTV-17 农业农村",
+    "CCTV-4 中文国际 美洲",
+    "CCTV-4 中文国际  欧洲",
+    "CCTV-5+ 体育赛事",
 ]
 
 # 官方默认省级卫视频道（7个置顶优先卫视 + 23个按首字拼音升序排列省级卫视，福建统一为东南卫视）
@@ -103,28 +114,39 @@ DEFAULT_SATELLITE_CHANNELS = [
     "云南卫视",   # Yunnan
 ]
 
-ALL_DEFAULT_TARGETS = DEFAULT_CCTV_CHANNELS + DEFAULT_SATELLITE_CHANNELS
+# 新增分类：电视频道（CHC系列与经典电影）
+DEFAULT_MOVIE_CHANNELS = [
+    "CHC家庭影院",
+    "CHC动作电影",
+    "CHC高清电影",
+    "经典电影",
+]
 
-# 央视台标副标题关键词辅助映射
+ALL_DEFAULT_TARGETS = DEFAULT_CCTV_CHANNELS + DEFAULT_SATELLITE_CHANNELS + DEFAULT_MOVIE_CHANNELS
+
+# 央视台标副标题关键词辅助映射（注意：长词优先匹配）
 CCTV_SUBTITLE_MAP: Dict[str, str] = {
+    "体育赛事": "CCTV-5+ 体育赛事",
+    "中文国际美洲": "CCTV-4 中文国际 美洲",
+    "中文国际欧洲": "CCTV-4 中文国际  欧洲",
+    "中文国际": "CCTV-4 中文国际",
+    "国防军事": "CCTV-7 国防军事",
+    "社会与法": "CCTV-12 社会与法",
+    "奥林匹克": "CCTV-16 奥林匹克",
+    "农业农村": "CCTV-17 农业农村",
+    "电视剧": "CCTV-8 电视剧",
     "综合": "CCTV-1 综合",
     "财经": "CCTV-2 财经",
     "综艺": "CCTV-3 综艺",
-    "中文国际": "CCTV-4 中文国际",
     "体育": "CCTV-5 体育",
     "电影": "CCTV-6 电影",
-    "国防军事": "CCTV-7 国防军事",
     "军事": "CCTV-7 国防军事",
-    "电视剧": "CCTV-8 电视剧",
     "纪录": "CCTV-9 纪录",
     "科教": "CCTV-10 科教",
     "戏曲": "CCTV-11 戏曲",
-    "社会与法": "CCTV-12 社会与法",
     "新闻": "CCTV-13 新闻",
     "少儿": "CCTV-14 少儿",
     "音乐": "CCTV-15 音乐",
-    "奥林匹克": "CCTV-16 奥林匹克",
-    "农业农村": "CCTV-17 农业农村",
     "农业": "CCTV-17 农业农村",
 }
 
@@ -200,6 +222,13 @@ SATELLITE_PINYIN_SLUGS: Dict[str, List[str]] = {
     "云南卫视": ["yunnan", "yunnanws"],
 }
 
+# 电视频道（CHC系列）裂变标识字典
+MOVIE_CHANNEL_SLUGS: Dict[str, List[str]] = {
+    "CHC家庭影院": ["chcjtyy", "chcjt", "jtyy"],
+    "CHC动作电影": ["chcdzdy", "chcdz", "dzdy"],
+    "CHC高清电影": ["chcgqdy", "chchd", "chcgq", "gqdy"],
+}
+
 # 黑名单正则规则
 BLACKLIST_URL_PATTERNS = re.compile(
     r'('
@@ -222,9 +251,6 @@ def get_resolution_speed_thresholds(width: int, height: int) -> Tuple[float, flo
     """
     根据视频画面分辨率返回对应的速度要求：
     返回: (最低可播入围速度 min_req_kbs, 流畅不卡顿速度 fluent_req_kbs, 是否为高清 is_hd)
-      - 1080P (height >= 1000 或 width >= 1800): 最低 350 KB/s，流畅 650 KB/s，属于高清(HD)
-      - 720P  (height >= 700  或 width >= 1200): 最低 240 KB/s，流畅 420 KB/s，属于高清(HD)
-      - 576P/574P 标清 (其余分辨率)            : 最低 120 KB/s，流畅 200 KB/s，属于标清(SD)
     """
     if height >= 1000 or width >= 1800:
         return SPEED_MIN_1080P, SPEED_FLUENT_1080P, True
@@ -234,8 +260,6 @@ def get_resolution_speed_thresholds(width: int, height: int) -> Tuple[float, flo
 
 
 def get_domestic_headers(extra_headers: Dict[str, str] = None) -> Dict[str, str]:
-    # 不伪造 X-Forwarded-For：它不会改变 GitHub Runner 的真实出口 IP，
-    # 反而可能触发 CDN/WAF 风控。保留接近常见 TVBox/OkHttp 的请求头。
     headers = {
         "User-Agent": TVBOX_USER_AGENT,
         "Accept": "*/*",
@@ -248,11 +272,15 @@ def get_domestic_headers(extra_headers: Dict[str, str] = None) -> Dict[str, str]
 
 
 def load_user_channel_structure() -> Dict[str, List[str]]:
-    """直接沿用 config.py 内置官方央卫视定义与排序"""
-    print("[*] 已加载 config.py 官方频道列表 (央视频道 17 个 + 卫视频道 30 个)", flush=True)
+    """直接沿用 config.py 内置官方央卫视与电视频道定义与排序"""
+    print(
+        f"[*] 已加载 config.py 官方频道列表 (央视频道 {len(DEFAULT_CCTV_CHANNELS)} 个 + 卫视频道 {len(DEFAULT_SATELLITE_CHANNELS)} 个 + 电视频道 {len(DEFAULT_MOVIE_CHANNELS)} 个)",
+        flush=True
+    )
     return {
         "央视频道": list(DEFAULT_CCTV_CHANNELS),
         "卫视频道": list(DEFAULT_SATELLITE_CHANNELS),
+        "电视频道": list(DEFAULT_MOVIE_CHANNELS),
     }
 
 
@@ -279,6 +307,13 @@ def clean_stream_url(raw_url: str) -> str:
 
 
 def normalize_channel_name(raw_name: str, custom_targets: Set[str] = None) -> str:
+    """
+    标准化频道名称，并严格区分：
+    - CCTV-8K 超高清 / CCTV-4K 超高清（绝不误判为 CCTV-8 或 CCTV-4）
+    - CCTV-4 中文国际 / CCTV-4 中文国际 美洲 / CCTV-4 中文国际  欧洲
+    - CCTV-5 体育 / CCTV-5+ 体育赛事
+    - CHC家庭影院 / CHC动作电影 / CHC高清电影 / 经典电影
+    """
     if not raw_name:
         return ""
     if any(k in raw_name for k in ("广播", "电台", "之声", "FM", "调频")):
@@ -286,16 +321,51 @@ def normalize_channel_name(raw_name: str, custom_targets: Set[str] = None) -> st
 
     clean_name = raw_name.strip()
 
-    if re.search(r'(?i)cctv[-_ ]?5\+', clean_name):
-        return ""
-
-    if any(k in clean_name for k in ("福建卫视", "福建台", "福建省台", "海峡卫视")):
-        return "东南卫视"
-
+    # 1. 若与自定义目标完全一致（如 "CCTV-4 中文国际  欧洲"），直接命中
     if custom_targets and clean_name in custom_targets:
         return clean_name
 
-    cctv_match = re.search(r'(?i)(?:cctv|中央)[-_ ]?0?(\d{1,2})(?!\d)', clean_name)
+    # 2. 【核心防误判】优先识别 CCTV-4K / CCTV-8K 超高清频道！
+    # 防止 "CCTV-8K 超高清" 被识别成 "CCTV-8 电视剧"，或 "CCTV-4K 高清" 被识别成 "CCTV-4 中文国际"
+    if re.search(r'(?i)(?:cctv|中央)[-_ ]?0?8k', clean_name) or "8K超高清" in clean_name.upper():
+        return "CCTV-8K 超高清" if (not custom_targets or "CCTV-8K 超高清" in custom_targets) else ""
+    if re.search(r'(?i)(?:cctv|中央)[-_ ]?0?4k', clean_name) or "4K超高清" in clean_name.upper():
+        return "CCTV-4K 超高清" if (not custom_targets or "CCTV-4K 超高清" in custom_targets) else ""
+
+    # 3. 优先识别 CCTV-5+ 体育赛事（防止被归入 CCTV-5 体育）
+    if (
+        re.search(r'(?i)(?:cctv|中央)[-_ ]?0?5\s*(?:\+|plus|p)', clean_name)
+        or "5+体育" in clean_name
+        or "体育赛事" in clean_name
+    ):
+        return "CCTV-5+ 体育赛事"
+
+    # 4. 优先识别 CCTV-4 欧洲 / 美洲 / 中文国际（亚洲）
+    if re.search(r'(?i)(?:cctv|中央)[-_ ]?0?4(?![0-9kK])', clean_name) or "中文国际" in clean_name:
+        if any(k in clean_name for k in ("欧洲", "欧", "EURO", "Euro", "euro")):
+            return "CCTV-4 中文国际  欧洲"
+        if any(k in clean_name for k in ("美洲", "美", "AMER", "Amer", "amer")):
+            return "CCTV-4 中文国际 美洲"
+        return "CCTV-4 中文国际"
+
+    # 5. 识别电视频道（CHC系列与经典电影）
+    if re.search(r'(?i)chc', clean_name) or any(k in clean_name for k in ("家庭影院", "动作电影", "高清电影")):
+        if "家庭" in clean_name:
+            return "CHC家庭影院"
+        if "动作" in clean_name:
+            return "CHC动作电影"
+        if "高清" in clean_name or re.search(r'(?i)chc[-_ ]?hd', clean_name):
+            return "CHC高清电影"
+
+    if "经典电影" in clean_name:
+        return "经典电影"
+
+    # 6. 福建/东南卫视归一
+    if any(k in clean_name for k in ("福建卫视", "福建台", "福建省台", "海峡卫视")):
+        return "东南卫视"
+
+    # 7. 常规 CCTV 1~17 匹配（负向断言排除 K/k/+，彻底杜绝 4K/8K/5+ 串台）
+    cctv_match = re.search(r'(?i)(?:cctv|中央)[-_ ]?0?(\d{1,2})(?!\d|k|K|\+)', clean_name)
     if cctv_match:
         num = int(cctv_match.group(1))
         if 1 <= num <= 17:
@@ -305,6 +375,7 @@ def normalize_channel_name(raw_name: str, custom_targets: Set[str] = None) -> st
                     return std_cctv
             return f"CCTV-{num}"
 
+    # 8. 30个省级卫视匹配
     for sat in DEFAULT_SATELLITE_CHANNELS:
         keyword = sat.replace("卫视", "")
         if keyword in clean_name and ("卫视" in clean_name or sat in clean_name or "台" in clean_name):
@@ -316,32 +387,72 @@ def normalize_channel_name(raw_name: str, custom_targets: Set[str] = None) -> st
 
 
 def parse_ocr_text_to_channel(ocr_raw_text: str, custom_targets: Set[str] = None) -> Optional[str]:
+    """
+    将画面左上角/右上角台标 OCR 识别出的文字转化为精确的标准频道名：
+    - 严格拦截 4K / 8K 台标，如果识别出 CCTV-4K 或 CCTV-8K，直接返回 "CCTV-4K 超高清" / "CCTV-8K 超高清"，
+      由调用方对比并剔除，绝不让它变成 CCTV-4 或 CCTV-8！
+    - 精准识别 CCTV-4 中文国际 美洲 / CCTV-4 中文国际  欧洲 / CCTV-4 中文国际
+    - 精准识别 CCTV-5+ 体育赛事 与 CHC 电影频道、经典电影
+    """
     if not ocr_raw_text:
         return None
 
     compact = re.sub(r'[\s\r\n]+', ' ', ocr_raw_text).strip()
     upper_compact = re.sub(r'[\s\-_.:：·]+', '', compact.upper())
 
-    if re.search(r'(?:CCTV|CCIV|CCT|GCTV|OCTV)0?5\+', upper_compact):
-        return None
+    # 1. 【最高优先级】检测画面是否为 CCTV-8K 或 CCTV-4K 超高清
+    if re.search(r'(?:CCTV|CCIV|CCT|GCTV|OCTV|0CTV|中央)0?8K', upper_compact) or "8K超高清" in upper_compact:
+        return "CCTV-8K 超高清"
+    if re.search(r'(?:CCTV|CCIV|CCT|GCTV|OCTV|0CTV|中央)0?4K', upper_compact) or "4K超高清" in upper_compact:
+        return "CCTV-4K 超高清"
 
-    m_cctv = re.search(r'(?:CCTV|CCIV|CCT|GCTV|OCTV|0CTV|中央)0?(\d{1,2})(?!\d)', upper_compact)
+    # 2. 检测是否为 CCTV-5+ 体育赛事
+    if (
+        re.search(r'(?:CCTV|CCIV|CCT|GCTV|OCTV|0CTV|中央)0?5(?:\+|PLUS)', upper_compact)
+        or "5+体育" in upper_compact
+        or "体育赛事" in compact
+    ):
+        return "CCTV-5+ 体育赛事"
+
+    # 3. 检测是否为 CCTV-4（细分 欧洲 / 美洲 / 中文国际）
+    if (
+        re.search(r'(?:CCTV|CCIV|CCT|GCTV|OCTV|0CTV|中央)0?4(?![0-9K])', upper_compact)
+        or "中文国际" in compact
+    ):
+        if any(k in compact for k in ("欧洲", "欧")) or "EURO" in upper_compact:
+            return "CCTV-4 中文国际  欧洲"
+        if any(k in compact for k in ("美洲", "美")) or "AMER" in upper_compact:
+            return "CCTV-4 中文国际 美洲"
+        return "CCTV-4 中文国际"
+
+    # 4. 检测电视频道（CHC家庭影院 / CHC动作电影 / CHC高清电影 / 经典电影）
+    if "家庭影院" in compact or "CHC家庭" in upper_compact:
+        return "CHC家庭影院"
+    if "动作电影" in compact or "CHC动作" in upper_compact:
+        return "CHC动作电影"
+    if "高清电影" in compact or "CHC高清" in upper_compact:
+        return "CHC高清电影"
+    if "经典电影" in compact:
+        return "经典电影"
+
+    # 5. 检测常规 CCTV 1~17（排除数字后紧跟 K 或 + 的情况）
+    m_cctv = re.search(r'(?:CCTV|CCIV|CCT|GCTV|OCTV|0CTV|中央)0?(\d{1,2})(?![0-9K\+])', upper_compact)
     if m_cctv:
         num = int(m_cctv.group(1))
         if 1 <= num <= 17:
             prefix = f"CCTV-{num} "
             for std_cctv in DEFAULT_CCTV_CHANNELS:
                 if std_cctv.startswith(prefix):
-                    if not custom_targets or std_cctv in custom_targets:
-                        return std_cctv
+                    return std_cctv
             return f"CCTV-{num}"
 
-    if any(tag in upper_compact for tag in ("CCTV", "CCIV", "GCTV", "中央")):
+    # 6. 若 CCTV 台标数字模糊，通过下方中文副标题识别
+    if any(tag in upper_compact for tag in ("CCTV", "CCIV", "GCTV", "OCTV", "中央")):
         for sub_kw, std_cctv in CCTV_SUBTITLE_MAP.items():
             if sub_kw in compact:
-                if not custom_targets or std_cctv in custom_targets:
-                    return std_cctv
+                return std_cctv
 
+    # 7. 识别省级卫视台标
     if any(k in compact for k in ("福建卫视", "东南卫视", "福建")):
         if "卫视" in compact or "东南" in compact:
             return "东南卫视"
@@ -406,8 +517,9 @@ def extrapolate_channels_from_seed(seed_url: str, seed_channel: str = "") -> Lis
     if clean_seed.count("&") >= 4 or ".swf" in clean_seed.lower():
         return results
 
+    # 1. CCTV 系列裂变（包含 CCTV 1~17 + CCTV-5+ + CCTV-4 美洲/欧洲）
     cctv_pattern = re.search(
-        r'([/=_.-])(cctv[-_]?0?(\d{1,2}))([a-zA-Z0-9_\-]*)(\.m3u8|\.flv|\.ts|/|$|\?)',
+        r'([/=_.-])(cctv[-_]?0?(\d{1,2}|\d\+|5plus|5p))([a-zA-Z0-9_\-]*)(\.m3u8|\.flv|\.ts|/|$|\?)',
         clean_seed,
         re.IGNORECASE
     )
@@ -421,21 +533,53 @@ def extrapolate_channels_from_seed(seed_url: str, seed_channel: str = "") -> Lis
         has_hyphen = "-" in matched_token
         has_underscore = "_" in matched_token
         has_zero = num_part.startswith("0") and len(num_part) == 2
+        is_upper = matched_token.isupper()
 
-        for std_ch in DEFAULT_CCTV_CHANNELS:
-            num = int(std_ch.split()[0].replace("CCTV-", ""))
+        def fmt_token(raw_tok: str) -> str:
+            return raw_tok.upper() if is_upper else raw_tok.lower()
+
+        # 裂变 CCTV 1~17
+        for num in range(1, 18):
+            std_ch = next(c for c in DEFAULT_CCTV_CHANNELS if c.startswith(f"CCTV-{num} "))
             num_str = f"0{num}" if has_zero and num < 10 else str(num)
             if has_hyphen:
-                token = f"cctv-{num_str}"
+                token = fmt_token(f"cctv-{num_str}")
             elif has_underscore:
-                token = f"cctv_{num_str}"
+                token = fmt_token(f"cctv_{num_str}")
             else:
-                token = f"cctv{num_str}"
-            if matched_token.isupper():
-                token = token.upper()
-            extrapolated_url = f"{prefix}{token}{extra_tag}{suffix}"
-            results.append((std_ch, extrapolated_url))
+                token = fmt_token(f"cctv{num_str}")
+            results.append((std_ch, f"{prefix}{token}{extra_tag}{suffix}"))
+
+        # 裂变 CCTV-5+ 体育赛事
+        for p_tok in ("cctv5plus", "cctv5p", "cctv5+", "cctv-5plus", "cctv-5+"):
+            results.append(("CCTV-5+ 体育赛事", f"{prefix}{fmt_token(p_tok)}{extra_tag}{suffix}"))
+
+        # 裂变 CCTV-4 美洲 / 欧洲
+        for am_tok in ("cctv4m", "cctv4a", "cctv4amer", "cctv4meizhou", "cctv-4m"):
+            results.append(("CCTV-4 中文国际 美洲", f"{prefix}{fmt_token(am_tok)}{extra_tag}{suffix}"))
+        for eu_tok in ("cctv4o", "cctv4e", "cctv4euro", "cctv4ouzhou", "cctv-4o"):
+            results.append(("CCTV-4 中文国际  欧洲", f"{prefix}{fmt_token(eu_tok)}{extra_tag}{suffix}"))
+
         return results
+
+    # 2. CHC 电影系列裂变
+    for chc_ch, chc_slugs in MOVIE_CHANNEL_SLUGS.items():
+        for slug in chc_slugs:
+            m_chc = re.search(
+                rf'([/=_.-])({re.escape(slug)})((?:[-_]?(?:hd|sd|fhd|1080p|720p))?)(\.m3u8|\.flv|\.ts|/|$|\?)',
+                clean_seed,
+                re.IGNORECASE
+            )
+            if m_chc:
+                prefix = clean_seed[:m_chc.start(2)]
+                matched_slug = m_chc.group(2)
+                q_tag = m_chc.group(3)
+                suffix = clean_seed[m_chc.end(3):]
+                for target_chc, target_slugs in MOVIE_CHANNEL_SLUGS.items():
+                    for cand_slug in target_slugs[:2]:
+                        s_tok = cand_slug.upper() if matched_slug.isupper() else cand_slug.lower()
+                        results.append((target_chc, f"{prefix}{s_tok}{q_tag}{suffix}"))
+                return results
 
     norm_seed_ch = normalize_channel_name(seed_channel) if seed_channel else ""
 
@@ -513,9 +657,9 @@ def extrapolate_channels_from_seed(seed_url: str, seed_channel: str = "") -> Lis
             if 1 <= raw_num <= 17:
                 prefix = clean_seed[:num_seq_match.start()]
                 suffix = clean_seed[num_seq_match.end():]
-                for std_ch in DEFAULT_CCTV_CHANNELS:
-                    cctv_num = int(std_ch.split()[0].replace("CCTV-", ""))
-                    formatted_num = f"{cctv_num:0{num_len}d}"
+                for num in range(1, 18):
+                    std_ch = next(c for c in DEFAULT_CCTV_CHANNELS if c.startswith(f"CCTV-{num} "))
+                    formatted_num = f"{num:0{num_len}d}"
                     extrapolated_url = f"{prefix}{delimiter}{formatted_num}{sub_tag}{ext}{suffix}"
                     results.append((std_ch, extrapolated_url))
                 return results
