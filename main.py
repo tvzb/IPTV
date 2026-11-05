@@ -5,7 +5,7 @@ IPTV 自动化五步工作流引擎 & 独立在线测速脚本
 核心特性：
   1. 严格按照 GitHub 网页搜索逻辑：
      - 只分别输入“更新 2026-10 CCTV-6,http”和“更新 2026-10 CCTV6,http”进行搜索，默认采集前 2 页结果；
-     - 每个仓库只取搜索结果排在最前面的第 1 个有预览框的文件（与图一网页搜索完全一致，绝不进同一个仓库把历史备份文件翻个遍）；
+     - 每个仓库只取搜索结果排在最前面的第 1 个有预览框的文件（与网页搜索完全一致，绝不进同一个仓库把历史备份文件翻个遍）；
      - 依次打开有预览框的结果 -> 点击“Raw”采集打开的纯文本内容；搜索结果中没有的，绝不擅自打开采集！
   2. 按分辨率动态速度门槛过滤：
      - 1920x1080 (1080P)：流畅阈值 >= 650 KB/s，最低可播门槛 >= 350 KB/s
@@ -32,41 +32,48 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Set, Tuple
 
 import requests
+import config
 
-from config import (
-    CHUNK_DOWNLOAD_MAX_BYTES,
-    CHUNK_DOWNLOAD_TIMEOUT,
-    CUSTOM_WECHAT_LABEL,
-    DEFAULT_SEARCH_PAGES,
-    ENABLE_LOGO_OCR,
-    GITHUB_SEARCH_QUERIES,
-    MAX_SAME_IP_PER_CHANNEL,
-    MAX_WORKERS,
-    MIN_REQUIRED_BYTES,
-    OUTPUT_LIVE_M3U,
-    OUTPUT_LIVE_TXT,
-    RAW_SOURCES_M3U,
-    RAW_SOURCES_TXT,
-    REQUEST_TIMEOUT,
-    RESULTS_PER_SEARCH_PAGE,
-    SEARCH_MONTH_STR,
-    SPEED_FLUENT_1080P,
-    SPEED_FLUENT_720P,
-    SPEED_FLUENT_SD,
-    SPEED_MIN_1080P,
-    SPEED_MIN_720P,
-    SPEED_MIN_SD,
-    build_channel_Lookup_map,
-    clean_stream_url,
-    extract_ip_port,
-    extrapolate_channels_from_seed,
-    get_domestic_headers,
-    get_resolution_speed_thresholds,
-    is_blacklisted_url,
-    load_user_channel_structure,
-    normalize_channel_name,
-    parse_ocr_text_to_channel,
+# 使用 getattr 安全读取配置，彻底杜绝因单个常量缺失引发 ImportError
+CHUNK_DOWNLOAD_MAX_BYTES = getattr(config, "CHUNK_DOWNLOAD_MAX_BYTES", 4 * 1024 * 1024)
+CHUNK_DOWNLOAD_TIMEOUT = getattr(config, "CHUNK_DOWNLOAD_TIMEOUT", 12.0)
+CUSTOM_WECHAT_LABEL = getattr(config, "CUSTOM_WECHAT_LABEL", "微信：bofutz")
+DEFAULT_SEARCH_PAGES = int(os.environ.get("SEARCH_PAGES", getattr(config, "DEFAULT_SEARCH_PAGES", 2)) or 2)
+ENABLE_LOGO_OCR = getattr(config, "ENABLE_LOGO_OCR", True)
+SEARCH_MONTH_STR = os.environ.get("SEARCH_MONTH", getattr(config, "SEARCH_MONTH_STR", "2026-10")).strip() or "2026-10"
+GITHUB_SEARCH_QUERIES = getattr(
+    config,
+    "GITHUB_SEARCH_QUERIES",
+    [
+        f"更新 {SEARCH_MONTH_STR} CCTV-6,http",
+        f"更新 {SEARCH_MONTH_STR} CCTV6,http",
+    ],
 )
+MAX_SAME_IP_PER_CHANNEL = getattr(config, "MAX_SAME_IP_PER_CHANNEL", 5)
+MAX_WORKERS = getattr(config, "MAX_WORKERS", 8)
+MIN_REQUIRED_BYTES = getattr(config, "MIN_REQUIRED_BYTES", 384 * 1024)
+OUTPUT_LIVE_M3U = getattr(config, "OUTPUT_LIVE_M3U", "live.m3u")
+OUTPUT_LIVE_TXT = getattr(config, "OUTPUT_LIVE_TXT", "live.txt")
+RAW_SOURCES_TXT = getattr(config, "RAW_SOURCES_TXT", "raw_sources.txt")
+REQUEST_TIMEOUT = getattr(config, "REQUEST_TIMEOUT", 6.0)
+RESULTS_PER_SEARCH_PAGE = getattr(config, "RESULTS_PER_SEARCH_PAGE", 20)
+SPEED_FLUENT_1080P = getattr(config, "SPEED_FLUENT_1080P", 650.0)
+SPEED_FLUENT_720P = getattr(config, "SPEED_FLUENT_720P", 420.0)
+SPEED_FLUENT_SD = getattr(config, "SPEED_FLUENT_SD", 200.0)
+SPEED_MIN_1080P = getattr(config, "SPEED_MIN_1080P", 350.0)
+SPEED_MIN_720P = getattr(config, "SPEED_MIN_720P", 240.0)
+SPEED_MIN_SD = getattr(config, "SPEED_MIN_SD", 120.0)
+
+build_channel_Lookup_map = config.build_channel_Lookup_map
+clean_stream_url = config.clean_stream_url
+extract_ip_port = config.extract_ip_port
+extrapolate_channels_from_seed = config.extrapolate_channels_from_seed
+get_domestic_headers = config.get_domestic_headers
+get_resolution_speed_thresholds = config.get_resolution_speed_thresholds
+is_blacklisted_url = config.is_blacklisted_url
+load_user_channel_structure = config.load_user_channel_structure
+normalize_channel_name = config.normalize_channel_name
+parse_ocr_text_to_channel = config.parse_ocr_text_to_channel
 
 try:
     import cv2
@@ -214,7 +221,7 @@ def search_github_multi_page_previews(
     max_pages: int = DEFAULT_SEARCH_PAGES
 ) -> List[Tuple[str, str, str, str, int]]:
     """
-    严格对齐 GitHub 网页搜索页面（如图一）：
+    严格对齐 GitHub 网页搜索页面：
     1. 只取带有代码预览框内容（snippets / text_matches 非空）的搜索结果；
     2. 按仓库去重（seen_repos）：同一个仓库只取搜索结果排在最前面的第 1 个文件，
        绝不把 hebijunge/tvbox-config 等仓库里的十几个历史备份文件重复塞满前 2 页！
@@ -225,7 +232,6 @@ def search_github_multi_page_previews(
     valid_results: List[Tuple[str, str, str, str, int]] = []
     seen_repos: Set[str] = set()
 
-    # 优先通过 GitHub Web Search 接口获取搜索页
     for page_idx in range(1, max_pages + 1):
         try:
             web_search_url = sanitize_url(f"{GH_HOST}/search")
@@ -257,7 +263,6 @@ def search_github_multi_page_previews(
                         if not repo_name or not file_path:
                             continue
 
-                        # 同一个仓库只取搜索结果中的第 1 条，与网页端搜索列表完全一致
                         if repo_name in seen_repos:
                             continue
 
@@ -266,7 +271,6 @@ def search_github_multi_page_previews(
                             snippets = "\n".join(s.get("lines", "") for s in item.get("snippets", []) if isinstance(s, dict))
                         clean_snip = re.sub(r'<[^>]+>', '', snippets).strip()
 
-                        # 必须有预览内容才采集
                         if not clean_snip:
                             continue
 
@@ -291,7 +295,6 @@ def search_github_multi_page_previews(
         if page_idx < max_pages:
             time.sleep(0.6)
 
-    # 当 GitHub Actions 环境网页端未登录受限时，使用 GitHub Code Search API（同样严格按 repo_name 去重且必须有 text_matches 预览框）
     clean_q = query.replace(",", " ")
     query_variants = list(dict.fromkeys([query, clean_q]))
 
@@ -299,7 +302,6 @@ def search_github_multi_page_previews(
         if len(valid_results) >= target_total:
             break
         api_url = sanitize_url(f"{GH_API_HOST}/search/code")
-        # 因为 API 可能会在一个仓库下返回多条历史文件，多翻几页 API 以凑满前 max_pages 页的不同仓库结果
         for api_page in range(1, max_pages + 3):
             params = {
                 "q": q_try,
@@ -319,8 +321,6 @@ def search_github_multi_page_previews(
                         if not repo_name or not file_path:
                             continue
 
-                        # 【核心修复】每个仓库只保留搜索排最前面的第 1 个文件！
-                        # 彻底解决 hebijunge/tvbox-config 霸占前 15 条的问题
                         if repo_name in seen_repos:
                             continue
 
@@ -328,7 +328,6 @@ def search_github_multi_page_previews(
                         fragments = [tm.get("fragment", "").strip() for tm in text_matches if tm.get("fragment", "").strip()]
                         combined_preview = "\n".join(fragments).strip()
 
-                        # 没有预览内容的条目直接跳过，绝不盲目打开
                         if not combined_preview:
                             continue
 
@@ -424,7 +423,6 @@ def step1_search_and_extract(target_channels: Set[str], search_pages: int = DEFA
 
         total_items = len(search_items)
         for idx, (display_name, blob_html_url, raw_url, preview_text, page_no) in enumerate(search_items, 1):
-            # 没有预览内容的直接跳过，绝不打开
             if not preview_text or not preview_text.strip():
                 continue
 
@@ -608,11 +606,6 @@ def recognize_channel_from_video_slice(
     service_hint: str = "",
     target_channels: Set[str] = None
 ) -> Optional[str]:
-    """
-    截取视频顶部画面（左上方 + 右上方台标区）并进行多阈值放大 OCR：
-    - 优先将识别出的多行文字拼接（例如主台标 "CCTV 4" 与下方小字 "中文国际欧洲"，或 "CCTV 8K 超高清"），
-      确保准确识别出 CCTV-4 中文国际美洲 / CCTV-4 中文国际欧洲 / CCTV-5+ 体育赛事，并彻底拦截 CCTV-4K / CCTV-8K！
-    """
     if not ENABLE_LOGO_OCR:
         return None
 
