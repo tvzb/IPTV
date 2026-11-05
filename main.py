@@ -1335,4 +1335,10 @@ def main():
         try:
             run_five_step_workflow(search_pages=effective_pages)
         except Exception as exc:
-            print(f"[FATAL] 工作流异常：{type(exc).__name
+            print(f"[FATAL] 工作流异常：{type(exc).__name__}: {exc}", flush=True)
+            write_emergency_outputs(str(exc))
+            raise
+
+
+if __name__ == "__main__":
+    main()
