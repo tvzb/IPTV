@@ -10,7 +10,7 @@ database_id = "123a6c91-5e6d-4cd7-9acf-d4c88a6ea9b4"
 
 [[r2_buckets]]
 binding = "BUCKET"
-bucket_name = "REPLACE_WITH_R2_BUCKET"
+bucket_name = "iptv-files"
 
 [vars]
 SITE_NAME = "IPTV 直播源中心"
