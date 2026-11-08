@@ -3,20 +3,15 @@
 IPTV 自动化五步工作流引擎 & 独立在线测速脚本
 
 核心特性：
-  1. 严格按照 GitHub 网页搜索逻辑：
-     - 只分别输入“更新 2026-10 CCTV-6,http”和“更新 2026-10 CCTV6,http”进行搜索，默认采集前 2 页结果；
-     - 每个仓库只取搜索结果排在最前面的第 1 个有预览框的文件（与网页搜索完全一致，绝不进同一个仓库把历史备份文件翻个遍）；
-     - 依次打开有预览框的结果 -> 点击“Raw”采集打开的纯文本内容；搜索结果中没有的，绝不擅自打开采集！
+  1. 搜索词优先检索月份更新标记，并扩展 CCTV/省级卫视中文名、拼音与文件类型，支持自由选择采集页数 (1~5页)；
   2. 按分辨率动态速度门槛过滤：
-     - 1920x1080 (1080P)：流畅阈值 >= 650 KB/s，最低可播门槛 >= 350 KB/s
+     - 1920x1080 (1080P)：流畅阈值 >= 650 KB/s，最低可播门槛 >= 350 KB/s（低于 350 KB/s 直接过滤，彻底消灭 0.10Mbps 黑屏转圈源）
      - 1280x720  (720P) ：流畅阈值 >= 420 KB/s，最低可播门槛 >= 240 KB/s
      - 720x576/574 (标清)：流畅阈值 >= 200 KB/s，最低可播门槛 >= 120 KB/s
   3. 同一频道严格按四档优先级排序：
      ① 高清且流畅 (Tier 4) -> ② 流畅标清 (Tier 3) -> ③ 高清卡顿备用 (Tier 2) -> ④ 标清卡顿备用 (Tier 1)
-  4. 测速切片视频画面台标 OCR 精准识别：
-     - 不采集 CCTV-8K 和 CCTV-4K（通过文本过滤 + 分辨率过滤 + 台标 OCR 识别三重拦截，绝不误判为 CCTV-8 或 CCTV-4）；
-     - 精准区分 CCTV-4 中文国际、CCTV-4 中文国际美洲、CCTV-4 中文国际欧洲、CCTV-5+ 体育赛事及 CHC 电影频道，自动改正错误台名；
-  5. 输出菜单固定为：央视频道 -> 卫视频道 -> 电视频道 -> 更新时间 -> 频道定制。
+  4. 测速切片视频画面左上角台标 OCR 识别与频道名称自动纠错；
+  5. 输出菜单固定为：央视频道 -> 卫视频道 -> 更新时间 (仅显示 YYYY-MM-DD) -> 频道定制 (仅显示 微信：bofutz)。
 """
 import argparse
 import datetime
@@ -24,6 +19,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
 import urllib.parse
@@ -32,48 +28,41 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Set, Tuple
 
 import requests
-import config
 
-# 使用 getattr 安全读取配置，彻底杜绝因单个常量缺失引发 ImportError
-CHUNK_DOWNLOAD_MAX_BYTES = getattr(config, "CHUNK_DOWNLOAD_MAX_BYTES", 4 * 1024 * 1024)
-CHUNK_DOWNLOAD_TIMEOUT = getattr(config, "CHUNK_DOWNLOAD_TIMEOUT", 12.0)
-CUSTOM_WECHAT_LABEL = getattr(config, "CUSTOM_WECHAT_LABEL", "微信：bofutz")
-DEFAULT_SEARCH_PAGES = int(os.environ.get("SEARCH_PAGES", getattr(config, "DEFAULT_SEARCH_PAGES", 2)) or 2)
-ENABLE_LOGO_OCR = getattr(config, "ENABLE_LOGO_OCR", True)
-SEARCH_MONTH_STR = os.environ.get("SEARCH_MONTH", getattr(config, "SEARCH_MONTH_STR", "2026-10")).strip() or "2026-10"
-GITHUB_SEARCH_QUERIES = getattr(
-    config,
-    "GITHUB_SEARCH_QUERIES",
-    [
-        f"更新 {SEARCH_MONTH_STR} CCTV-6,http",
-        f"更新 {SEARCH_MONTH_STR} CCTV6,http",
-    ],
+from config import (
+    CHUNK_DOWNLOAD_MAX_BYTES,
+    CHUNK_DOWNLOAD_TIMEOUT,
+    CUSTOM_WECHAT_LABEL,
+    DEFAULT_SEARCH_PAGES,
+    ENABLE_LOGO_OCR,
+    MAX_CANDIDATES_PER_CHANNEL,
+    MAX_SAME_IP_PER_CHANNEL,
+    MAX_WORKERS,
+    MIN_REQUIRED_BYTES,
+    MIN_SPEED_KBS,
+    OUTPUT_LIVE_M3U,
+    OUTPUT_LIVE_TXT,
+    RAW_SOURCES_M3U,
+    RAW_SOURCES_TXT,
+    REQUEST_TIMEOUT,
+    RESULTS_PER_SEARCH_PAGE,
+    SPEED_FLUENT_1080P,
+    SPEED_FLUENT_720P,
+    SPEED_FLUENT_SD,
+    SPEED_MIN_1080P,
+    SPEED_MIN_720P,
+    SPEED_MIN_SD,
+    build_channel_Lookup_map,
+    clean_stream_url,
+    extract_ip_port,
+    extrapolate_channels_from_seed,
+    get_domestic_headers,
+    get_resolution_speed_thresholds,
+    is_blacklisted_url,
+    load_user_channel_structure,
+    normalize_channel_name,
+    parse_ocr_text_to_channel,
 )
-MAX_SAME_IP_PER_CHANNEL = getattr(config, "MAX_SAME_IP_PER_CHANNEL", 5)
-MAX_WORKERS = getattr(config, "MAX_WORKERS", 8)
-MIN_REQUIRED_BYTES = getattr(config, "MIN_REQUIRED_BYTES", 384 * 1024)
-OUTPUT_LIVE_M3U = getattr(config, "OUTPUT_LIVE_M3U", "live.m3u")
-OUTPUT_LIVE_TXT = getattr(config, "OUTPUT_LIVE_TXT", "live.txt")
-RAW_SOURCES_TXT = getattr(config, "RAW_SOURCES_TXT", "raw_sources.txt")
-REQUEST_TIMEOUT = getattr(config, "REQUEST_TIMEOUT", 6.0)
-RESULTS_PER_SEARCH_PAGE = getattr(config, "RESULTS_PER_SEARCH_PAGE", 20)
-SPEED_FLUENT_1080P = getattr(config, "SPEED_FLUENT_1080P", 650.0)
-SPEED_FLUENT_720P = getattr(config, "SPEED_FLUENT_720P", 420.0)
-SPEED_FLUENT_SD = getattr(config, "SPEED_FLUENT_SD", 200.0)
-SPEED_MIN_1080P = getattr(config, "SPEED_MIN_1080P", 350.0)
-SPEED_MIN_720P = getattr(config, "SPEED_MIN_720P", 240.0)
-SPEED_MIN_SD = getattr(config, "SPEED_MIN_SD", 120.0)
-
-build_channel_Lookup_map = config.build_channel_Lookup_map
-clean_stream_url = config.clean_stream_url
-extract_ip_port = config.extract_ip_port
-extrapolate_channels_from_seed = config.extrapolate_channels_from_seed
-get_domestic_headers = config.get_domestic_headers
-get_resolution_speed_thresholds = config.get_resolution_speed_thresholds
-is_blacklisted_url = config.is_blacklisted_url
-load_user_channel_structure = config.load_user_channel_structure
-normalize_channel_name = config.normalize_channel_name
-parse_ocr_text_to_channel = config.parse_ocr_text_to_channel
 
 try:
     import cv2
@@ -111,6 +100,19 @@ GH_HOST = "https://" + "github.com"
 GH_API_HOST = "https://" + "api.github.com"
 GH_RAW_HOST = "https://" + "raw.githubusercontent.com"
 
+FALLBACK_GITHUB_MATRIX = [
+    f"{GH_RAW_HOST}/Guovin/iptv-api/gd/output/result.txt",
+    f"{GH_RAW_HOST}/iptvjs/iptv-api/main/output/user_result.txt",
+    f"{GH_RAW_HOST}/cymz6/AutoIPTV-Hotel/main/lives.txt",
+    f"{GH_RAW_HOST}/Ftindy/IPTV-URL/main/output/result.txt",
+    f"{GH_RAW_HOST}/vbskycn/iptv/master/tv/hd.txt",
+    f"{GH_RAW_HOST}/fanmingming/live/main/tv/m3u/ipv4.m3u",
+    f"{GH_RAW_HOST}/yuanzl77/IPTV/main/live.txt",
+    f"{GH_RAW_HOST}/suxuang/myIPTV/main/ipv4.m3u",
+    f"{GH_RAW_HOST}/kimwang1978/collect-tv-txt/main/merged_output.txt",
+    f"{GH_RAW_HOST}/Kimentanm/aptv/master/m3u/iptv.m3u",
+]
+
 
 def sanitize_url(u: str) -> str:
     if not u:
@@ -123,6 +125,13 @@ def sanitize_url(u: str) -> str:
 
 
 def classify_stream_quality_group(width: int, height: int, speed_kbs: float, vtag: str) -> Tuple[int, str]:
+    """
+    严格按照用户指定的四档排序逻辑对单个直播源定级：
+      - 第 4 档 (最高优先级)：【高清且流畅】(1080P 速度 >= 650KB/s，或 720P 速度 >= 420KB/s)
+      - 第 3 档 (第二优先级)：【流畅标清】  (576P/574P 标清，且速度 >= 200KB/s)
+      - 第 2 档 (第三优先级)：【高清卡顿】  (1080P 速度在 350~650KB/s，或 720P 速度在 240~420KB/s)
+      - 第 1 档 (第四优先级)：【标清卡顿】  (576P/574P 标清，速度在 120~200KB/s)
+    """
     min_req, fluent_req, is_hd = get_resolution_speed_thresholds(width, height)
     is_fluent = speed_kbs >= fluent_req
 
@@ -136,7 +145,15 @@ def classify_stream_quality_group(width: int, height: int, speed_kbs: float, vta
         return 1, "标清备用"
 
 
-def stream_sort_key(item: Tuple[str, float, float, int, int, str]) -> Tuple[int, float, float, int, int]:
+def stream_sort_key(item: Tuple[str, float, float, int, int, str]) -> Tuple[int, int, int, float, float]:
+    """
+    同一频道直播源排序主键：
+      1. 流畅度与画质四档分类 (4:高清且流畅 > 3:流畅标清 > 2:高清卡顿 > 1:标清卡顿)
+      2. H.264 硬解兼容性优先 (H264 盒子秒开不黑屏，优于 HEVC)
+      3. 同档位下分辨率高度 (如在高清流畅档内，1080P 排在 720P 前)
+      4. 实测稳态速度 (封顶 2500 KB/s 防海外虚高)
+      5. 首包低延迟 (-ttfb_ms)
+    """
     url, speed_kbs, ttfb_ms, width, height, vtag = item
     quality_tier, _ = classify_stream_quality_group(width, height, speed_kbs, vtag)
     is_h264 = 1 if ("H264" in vtag.upper() or "AVC" in vtag.upper()) else 0
@@ -145,6 +162,10 @@ def stream_sort_key(item: Tuple[str, float, float, int, int, str]) -> Tuple[int,
     low_latency = -round(ttfb_ms, 0)
 
     return (quality_tier, capped_speed, low_latency, is_h264, res_height)
+
+
+def get_current_month_str() -> str:
+    return datetime.datetime.now().strftime("%Y-%m")
 
 
 def get_github_search_headers() -> Dict[str, str]:
@@ -189,7 +210,6 @@ def build_blob_and_raw_urls(item: dict) -> Tuple[str, str]:
 
 
 def open_preview_and_click_raw(blob_html_url: str, raw_url: str) -> Tuple[str, str]:
-    """打开搜索结果文件页 -> 点击 Raw 获取纯文本内容"""
     blob_html_url = sanitize_url(blob_html_url)
     raw_url = sanitize_url(raw_url)
 
@@ -213,24 +233,50 @@ def open_preview_and_click_raw(blob_html_url: str, raw_url: str) -> Tuple[str, s
         except Exception:
             continue
 
-    return "", "未能读取 Raw 纯文本"
+    if blob_html_url:
+        try:
+            r_blob = requests.get(blob_html_url, headers=get_github_web_headers(), timeout=10)
+            if r_blob.status_code == 200:
+                text_body = r_blob.text
+                try:
+                    data = r_blob.json()
+                    raw_lines = (
+                        data.get("payload", {}).get("blob", {}).get("rawLines")
+                        or data.get("blob", {}).get("rawLines")
+                    )
+                    if isinstance(raw_lines, list) and len(raw_lines) > 0:
+                        return "\n".join(raw_lines), "文件页文字框纯文本 (rawLines)"
+                except Exception:
+                    pass
+
+                m_script = re.search(
+                    r'<script[^>]*data-target="react-app\.embeddedData"[^>]*>(.*?)</script>',
+                    text_body,
+                    re.DOTALL | re.IGNORECASE
+                )
+                if m_script:
+                    try:
+                        embedded_json = json.loads(m_script.group(1).strip())
+                        raw_lines = embedded_json.get("payload", {}).get("blob", {}).get("rawLines")
+                        if isinstance(raw_lines, list) and len(raw_lines) > 0:
+                            return "\n".join(raw_lines), "文件页文字框内嵌数据"
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    return "", "未能读取"
 
 
 def search_github_multi_page_previews(
     query: str,
-    max_pages: int = DEFAULT_SEARCH_PAGES
+    max_pages: int = 1
 ) -> List[Tuple[str, str, str, str, int]]:
-    """
-    严格对齐 GitHub 网页搜索页面：
-    1. 只取带有代码预览框内容（snippets / text_matches 非空）的搜索结果；
-    2. 按仓库去重（seen_repos）：同一个仓库只取搜索结果排在最前面的第 1 个文件，
-       绝不把 hebijunge/tvbox-config 等仓库里的十几个历史备份文件重复塞满前 2 页！
-    """
     max_pages = max(1, min(int(max_pages), 10))
     target_total = max_pages * RESULTS_PER_SEARCH_PAGE
 
     valid_results: List[Tuple[str, str, str, str, int]] = []
-    seen_repos: Set[str] = set()
+    seen_urls: Set[str] = set()
 
     for page_idx in range(1, max_pages + 1):
         try:
@@ -262,27 +308,19 @@ def search_github_multi_page_previews(
                         commit_sha = item.get("commit_sha", "main")
                         if not repo_name or not file_path:
                             continue
-
-                        if repo_name in seen_repos:
-                            continue
-
-                        snippets = item.get("hl_trunc_description", "") or ""
-                        if not snippets and isinstance(item.get("snippets"), list):
-                            snippets = "\n".join(s.get("lines", "") for s in item.get("snippets", []) if isinstance(s, dict))
-                        clean_snip = re.sub(r'<[^>]+>', '', snippets).strip()
-
-                        if not clean_snip:
-                            continue
-
-                        seen_repos.add(repo_name)
                         display_name = f"{repo_name} · {file_path}"
                         blob_html_url = f"{GH_HOST}/{repo_name}/blob/{commit_sha}/{file_path}"
                         raw_url = f"{GH_RAW_HOST}/{repo_name}/{commit_sha}/{file_path}"
+                        snippets = item.get("hl_trunc_description", "") or ""
+                        clean_snip = re.sub(r'<[^>]+>', '', snippets).strip()
+                        if raw_url in seen_urls:
+                            continue
+                        seen_urls.add(raw_url)
                         valid_results.append((display_name, blob_html_url, raw_url, clean_snip, page_idx))
                         page_added += 1
                         if len(valid_results) >= target_total:
                             break
-                    print(f"  [*] 网页端搜索第 {page_idx}/{max_pages} 页：获取到 {page_added} 个带预览框的仓库结果", flush=True)
+                    print(f"  [*] 网页端搜索第 {page_idx}/{max_pages} 页：获取到 {page_added} 条独立仓库结果", flush=True)
                 else:
                     break
             else:
@@ -297,12 +335,13 @@ def search_github_multi_page_previews(
 
     clean_q = query.replace(",", " ")
     query_variants = list(dict.fromkeys([query, clean_q]))
+    api_pages_needed = max(1, min(max_pages, 3))
 
     for q_try in query_variants:
         if len(valid_results) >= target_total:
             break
         api_url = sanitize_url(f"{GH_API_HOST}/search/code")
-        for api_page in range(1, max_pages + 3):
+        for api_page in range(1, min(api_pages_needed + 1, 10)):
             params = {
                 "q": q_try,
                 "per_page": "100",
@@ -315,29 +354,26 @@ def search_github_multi_page_previews(
                     if not items:
                         break
 
+                    # 一个仓库可能同时保存多个频道/日期文件，必须按文件 URL 去重，不能按仓库名去重。
                     for item in items:
                         repo_name = item.get("repository", {}).get("full_name", "")
                         file_path = item.get("path", "")
                         if not repo_name or not file_path:
                             continue
-
-                        if repo_name in seen_repos:
-                            continue
+                        display_name = f"{repo_name} · {file_path}"
 
                         text_matches = item.get("text_matches", [])
                         fragments = [tm.get("fragment", "").strip() for tm in text_matches if tm.get("fragment", "").strip()]
-                        combined_preview = "\n".join(fragments).strip()
+                        combined_preview = "\n".join(fragments)
 
-                        if not combined_preview:
-                            continue
-
-                        seen_repos.add(repo_name)
-                        display_name = f"{repo_name} · {file_path}"
                         blob_html_url, raw_url = build_blob_and_raw_urls(item)
-                        logical_page = (len(valid_results) // RESULTS_PER_SEARCH_PAGE) + 1
-                        valid_results.append((display_name, blob_html_url, raw_url, combined_preview, logical_page))
-                        if len(valid_results) >= target_total:
-                            break
+                        unique_key = raw_url or blob_html_url
+                        if unique_key and unique_key not in seen_urls:
+                            seen_urls.add(unique_key)
+                            logical_page = (len(valid_results) // RESULTS_PER_SEARCH_PAGE) + 1
+                            valid_results.append((display_name, blob_html_url, raw_url, combined_preview, logical_page))
+                            if len(valid_results) >= target_total:
+                                break
 
                     if len(valid_results) >= target_total or len(items) < 100:
                         break
@@ -352,7 +388,7 @@ def search_github_multi_page_previews(
                 break
 
     print(
-        f"  [*] 搜索完成：设定采集前 {max_pages} 页（目标 {target_total} 条），实际获取 {len(valid_results)} 个带预览框的独立仓库结果",
+        f"  [*] 搜索完成：设定采集前 {max_pages} 页（目标 {target_total} 条），实际获取 {len(valid_results)} 条独立仓库结果",
         flush=True
     )
     return valid_results
@@ -393,27 +429,167 @@ def extract_raw_entries_from_text(content: str) -> List[Tuple[str, str]]:
     return entries
 
 
+def github_api_get(url: str, params: Optional[dict] = None):
+    """GitHub API 请求：带令牌优先，短暂退避，避免单个仓库失败中断全流程。"""
+    headers = get_github_search_headers()
+    headers["Accept"] = "application/vnd.github+json"
+    headers["X-GitHub-Api-Version"] = "2022-11-28"
+    try:
+        resp = requests.get(url, headers=headers, params=params, timeout=18)
+        if resp.status_code in (403, 429):
+            print(f"  [!] GitHub API 限流/拒绝：{resp.status_code} {url}", flush=True)
+        return resp
+    except requests.RequestException as exc:
+        print(f"  [!] GitHub API 请求失败：{exc}", flush=True)
+        return None
+
+
+def discover_recent_github_playlist_files(target_channels: Set[str], days: int = 30,
+                                          max_repositories: int = 35) -> List[Tuple[str, str]]:
+    """按仓库最近推送时间发现候选播放列表，并核对具体文件最近一次提交时间。
+
+    GitHub Code Search 不支持可靠的文件更新时间过滤，因此先用 Repository Search 的
+    pushed:>= 日期缩小到近 N 天活跃仓库，再对候选播放列表路径查询最后一次文件提交。
+    这是比把“更新 2026-11”写死在代码搜索词中更准确的时间筛选方式。
+    """
+    since = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)).date().isoformat()
+    print(f"\n[*] GitHub 最近 {days} 天仓库发现：pushed:>={since}，随后核对播放列表文件提交日期", flush=True)
+    queries = [f'iptv pushed:>={since}', f'(iptv OR m3u OR live-tv) pushed:>={since}']
+    repos = {}
+    for query in queries:
+        resp = github_api_get(f"{GH_API_HOST}/search/repositories", {
+            "q": query, "sort": "updated", "order": "desc", "per_page": "50", "page": "1"
+        })
+        if not resp or resp.status_code != 200:
+            continue
+        for item in resp.json().get("items", []):
+            full_name = item.get("full_name")
+            if full_name:
+                repos[full_name] = item
+        if len(repos) >= max_repositories:
+            break
+    selected = list(repos.values())[:max_repositories]
+    print(f"  [*] 最近活跃仓库候选：{len(selected)} 个", flush=True)
+
+    candidates = []
+    for repo in selected:
+        full_name = repo.get("full_name", "")
+        branch = repo.get("default_branch", "main") or "main"
+        tree_resp = github_api_get(f"{GH_API_HOST}/repos/{full_name}/git/trees/{urllib.parse.quote(branch, safe='')}", {"recursive": "1"})
+        if not tree_resp or tree_resp.status_code != 200:
+            continue
+        tree = tree_resp.json().get("tree", [])
+        paths = []
+        for node in tree:
+            path = node.get("path", "")
+            low = path.lower()
+            if node.get("type") != "blob" or not low.endswith((".txt", ".m3u", ".m3u8")):
+                continue
+            if any(x in low for x in ("readme", "license", "changelog", "issue", "release")):
+                continue
+            if not any(x in low for x in ("iptv", "live", "tv", "m3u", "playlist", "channel", "output", "ipv4")):
+                continue
+            size = node.get("size", 0) or 0
+            if size > 5 * 1024 * 1024:
+                continue
+            paths.append((path, size))
+        # 优先选择常见播放列表目录和较小文本，最多每仓库 2 个文件，控制 API 请求量
+        paths.sort(key=lambda x: (0 if any(k in x[0].lower() for k in ("output", "live", "tv", "m3u")) else 1, x[1]))
+        for path, size in paths[:2]:
+            candidates.append((full_name, branch, path))
+
+    print(f"  [*] 发现候选播放列表文件：{len(candidates)} 个；开始核对文件自身最近提交日期", flush=True)
+    results: List[Tuple[str, str]] = []
+    seen_urls: Set[str] = set()
+    checked = 0
+    for full_name, branch, path in candidates:
+        if checked >= 100:
+            break
+        checked += 1
+        commits = github_api_get(f"{GH_API_HOST}/repos/{full_name}/commits", {"path": path, "per_page": "1"})
+        if not commits or commits.status_code != 200:
+            continue
+        commit_items = commits.json()
+        if not commit_items:
+            continue
+        commit = commit_items[0].get("commit", {}).get("committer", {}).get("date") or commit_items[0].get("commit", {}).get("author", {}).get("date", "")
+        try:
+            committed = datetime.datetime.fromisoformat(commit.replace("Z", "+00:00"))
+            if committed.date() < datetime.date.fromisoformat(since):
+                continue
+        except Exception:
+            continue
+        raw_url = f"{GH_RAW_HOST}/{full_name}/{branch}/{urllib.parse.quote(path, safe='/')}"
+        if raw_url in seen_urls:
+            continue
+        seen_urls.add(raw_url)
+        try:
+            raw_resp = requests.get(raw_url, headers=HEADERS, timeout=18)
+            if raw_resp.status_code != 200 or not raw_resp.text:
+                continue
+            entries = extract_raw_entries_from_text(raw_resp.text)
+            matched = 0
+            for raw_ch, raw_url_str in entries:
+                norm_ch = normalize_channel_name(raw_ch, target_channels)
+                if norm_ch in target_channels:
+                    results.append((norm_ch, raw_url_str))
+                    matched += 1
+            print(f"  [✓] {full_name}/{path} | 文件更新 {committed.date()} | 命中 {matched} 条", flush=True)
+        except requests.RequestException as exc:
+            print(f"  [!] 读取候选文件失败 {full_name}/{path}: {exc}", flush=True)
+    print(f"[*] 最近 {days} 天文件更新检索完成：检查 {checked} 个文件，提取目标频道源 {len(results)} 条", flush=True)
+    return results
+
+
 def step1_search_and_extract(target_channels: Set[str], search_pages: int = DEFAULT_SEARCH_PAGES) -> List[Tuple[str, str]]:
-    """
-    第一步：严格只从搜索结果中采集内容！
-    - 分别输入 "更新 2026-10 CCTV-6,http" 和 "更新 2026-10 CCTV6,http"
-    - 依次打开有预览框的搜索结果，进去点击 Raw 采集纯文本内容
-    - 搜索结果中没有的，绝不擅自打开采集！
-    """
+    curr_month = get_current_month_str()
     search_pages = max(1, int(search_pages))
     print("=" * 86, flush=True)
     print(
-        f"🚀 【第一步】直接从 GitHub 搜索结果采集 (采集前 {search_pages} 页，每页 {RESULTS_PER_SEARCH_PAGE} 条，仅打开有预览的结果点击 Raw)",
+        f"🚀 【第一步】按页采集 GitHub 搜索结果 (当前设定采集页数: 前 {search_pages} 页, 即每词最多 {search_pages * RESULTS_PER_SEARCH_PAGE} 个仓库) | 月份: {curr_month}",
         flush=True
     )
     print("=" * 86, flush=True)
 
-    raw_extracted_records: List[Tuple[str, str]] = []
+    # 主检索：最近 30 天真实更新过的播放列表文件（仓库活跃时间 + 文件最后提交时间双重核验）。
+    # 这一步不依赖“更新 2026-11”这样的文本标记，避免月初结果过少。
+    raw_extracted_records: List[Tuple[str, str]] = discover_recent_github_playlist_files(
+        target_channels, days=int(os.environ.get("RECENT_DAYS", "30")),
+        max_repositories=int(os.environ.get("MAX_RECENT_REPOS", "60"))
+    )
+
+    # 辅助检索：动态覆盖最近两个自然月份，兼容“更新 YYYY-MM / YYYY年M月 / 更新时间”等写法。
+    # GitHub Code Search 结果用于补充，不作为唯一数据来源。
+    cctv_terms_a = ' OR '.join([f'"CCTV-{i}"' for i in range(1,10)] + [f'CCTV{i}' for i in range(1,10)] + [f'"CCTV {i}"' for i in range(1,10)])
+    cctv_terms_b = ' OR '.join([f'"CCTV-{i}"' for i in range(10,18)] + [f'CCTV{i}' for i in range(10,18)] + [f'"CCTV {i}"' for i in range(10,18)])
+    satellite_a = ' OR '.join(['"安徽卫视"','"北京卫视"','"重庆卫视"','"东南卫视"','"甘肃卫视"','"广东卫视"','"广西卫视"','"贵州卫视"','"海南卫视"','"河北卫视"','"河南卫视"','"黑龙江卫视"','"湖北卫视"','"湖南卫视"','"吉林卫视"','"江西卫视"'])
+    satellite_b = ' OR '.join(['"江苏卫视"','"辽宁卫视"','"内蒙古卫视"','"宁夏卫视"','"青海卫视"','"山东卫视"','"山西卫视"','"陕西卫视"','"深圳卫视"','"四川卫视"','"天津卫视"','"西藏卫视"','"新疆卫视"','"云南卫视"','"东方卫视"','"浙江卫视"'])
+    month_values = []
+    today = datetime.date.today()
+    for offset in (0, 1):
+        month_index = today.year * 12 + today.month - 1 - offset
+        year, month0 = divmod(month_index, 12)
+        month_values.append(f"{year}-{month0 + 1:02d}")
+    exact_queries = [
+        f'({cctv_terms_a}) AND http in:file',
+        f'({cctv_terms_b}) AND http in:file',
+        f'({cctv_terms_a}) AND http extension:m3u',
+        f'({satellite_a}) AND http in:file',
+        f'({satellite_b}) AND http in:file',
+        f'("CCTV-6" OR CCTV6 OR "电影频道") AND http in:file',
+    ]
+    for month in month_values:
+        exact_queries.extend([
+            f'"更新 {month}" (CCTV OR CCTV6 OR "卫视")',
+            f'"更新时间" "{month}" (CCTV OR "卫视")',
+            f'"{month}" (CCTV OR "央视" OR "卫视") http in:file',
+        ])
+
     visited_files: Set[str] = set()
 
-    for q in GITHUB_SEARCH_QUERIES:
+    for q in exact_queries:
         print(
-            f"\n[*] 正在搜索关键词: 「{q}」 (采集前 {search_pages} 页)...",
+            f"\n[*] 正在搜索关键词: 「{q}」 (采集第 1 ~ {search_pages} 页，每页 {RESULTS_PER_SEARCH_PAGE} 条独立仓库)...",
             flush=True
         )
         search_items = search_github_multi_page_previews(q, max_pages=search_pages)
@@ -423,18 +599,16 @@ def step1_search_and_extract(target_channels: Set[str], search_pages: int = DEFA
 
         total_items = len(search_items)
         for idx, (display_name, blob_html_url, raw_url, preview_text, page_no) in enumerate(search_items, 1):
-            if not preview_text or not preview_text.strip():
-                continue
-
             unique_key = raw_url or blob_html_url
             if unique_key in visited_files:
-                print(f"  -> [第{page_no}页 | {idx}/{total_items}] 已采集过该搜索结果文件，跳过重复项: {display_name}", flush=True)
+                print(f"  -> [第{page_no}页 | {idx}/{total_items}] 已采集过该仓库文件，跳过重复项: {display_name}", flush=True)
                 continue
             visited_files.add(unique_key)
 
-            preview_first_line = preview_text.splitlines()[0][:65]
-            print(f"  -> [第{page_no}页 | {idx}/{total_items}] 打开有预览的搜索结果: {display_name}", flush=True)
-            print(f"     [预览框内容] {preview_first_line}...", flush=True)
+            preview_first_line = preview_text.splitlines()[0][:65] if preview_text else ""
+            print(f"  -> [第{page_no}页 | {idx}/{total_items}] 打开预览框: {display_name}", flush=True)
+            if preview_first_line:
+                print(f"     [预览框内容] {preview_first_line}...", flush=True)
 
             full_text, source_mode = open_preview_and_click_raw(blob_html_url, raw_url)
             matched_in_file = 0
@@ -446,13 +620,33 @@ def step1_search_and_extract(target_channels: Set[str], search_pages: int = DEFA
                         raw_extracted_records.append((norm_ch, raw_url_str))
                         matched_in_file += 1
                 print(f"     [✓] {source_mode} -> 成功采集目标频道直播源: {matched_in_file} 条", flush=True)
-            else:
-                print(f"     [!] 未能打开 Raw 纯文本，跳过该条结果", flush=True)
+            elif preview_text:
+                for raw_ch, raw_url_str in extract_raw_entries_from_text(preview_text):
+                    norm_ch = normalize_channel_name(raw_ch, target_channels)
+                    if norm_ch in target_channels:
+                        raw_extracted_records.append((norm_ch, raw_url_str))
+                        matched_in_file += 1
+                print(f"     [!] Raw 页面响应超时，已从预览框采集目标频道直播源: {matched_in_file} 条", flush=True)
 
         time.sleep(0.8)
 
+    print("\n[*] 正在同步国内高活性直播源 Raw 补充矩阵...", flush=True)
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        future_map = {
+            executor.submit(open_preview_and_click_raw, "", sanitize_url(u)): sanitize_url(u)
+            for u in FALLBACK_GITHUB_MATRIX
+            if sanitize_url(u) not in visited_files
+        }
+        for fut in as_completed(future_map):
+            content, _ = fut.result()
+            if content:
+                for raw_ch, raw_url_str in extract_raw_entries_from_text(content):
+                    norm_ch = normalize_channel_name(raw_ch, target_channels)
+                    if norm_ch in target_channels:
+                        raw_extracted_records.append((norm_ch, raw_url_str))
+
     print(
-        f"\n[✓] 第一步完成：严格从前 {search_pages} 页搜索结果中打开 {len(visited_files)} 个有预览的文件并点击 Raw，共提取目标频道直播源 {len(raw_extracted_records)} 条。",
+        f"\n[✓] 第一步完成：共采集前 {search_pages} 页（合计打开 {len(visited_files)} 个不同仓库文件），提取原始直播源 {len(raw_extracted_records)} 条。",
         flush=True
     )
     return raw_extracted_records
@@ -463,7 +657,7 @@ def step2_clean_and_deduplicate(
     target_channels: Set[str]
 ) -> Tuple[Dict[str, List[str]], Set[str]]:
     print("\n" + "=" * 76, flush=True)
-    print("🧹 【第二步】清洗提取结果 ($尾缀剔除、拦截/rtp/与/udp/组播假源、过滤4K/8K、HTTP严格去重)", flush=True)
+    print("🧹 【第二步】清洗提取结果 ($尾缀剔除、拦截/rtp/与/udp/组播假源、HTTP严格去重与配额控制)", flush=True)
     print("=" * 76, flush=True)
 
     cleaned_pool: Dict[str, List[str]] = {ch: [] for ch in target_channels}
@@ -472,6 +666,7 @@ def step2_clean_and_deduplicate(
     removed_suffix_count = 0
     blocked_junk_count = 0
     blocked_udpxy_count = 0
+    channel_overflow_count = 0
 
     for raw_ch, raw_url in raw_records:
         raw_url = sanitize_url(raw_url)
@@ -502,6 +697,7 @@ def step2_clean_and_deduplicate(
         if norm_u in seen_urls_global:
             continue
 
+        # 初次测速前不做每频道/同IP配额截断，避免丢失可用于测速和IP规律分析的种子。
         seen_urls_global.add(norm_u)
         cleaned_pool[std_ch].append(clean_url)
         total_cleaned += 1
@@ -510,7 +706,7 @@ def step2_clean_and_deduplicate(
     print(f"    - 已清除含 '$' 尾缀标记的地址: {removed_suffix_count} 处", flush=True)
     print(f"    - 已彻底拦截两IP相连的 /rtp/ 与 /udp/ 组播无图像假源: {blocked_udpxy_count} 条", flush=True)
     print(f"    - 已拦截纯音频广播/.swf/一次性Token假源: {blocked_junk_count} 条", flush=True)
-    print(f"    - 全局URL去重后总待测候选源: {total_cleaned} 条", flush=True)
+    print(f"    - 初次测速候选池不设频道/IP条数上限；全局URL去重后总待测候选源: {total_cleaned} 条", flush=True)
     return cleaned_pool, seen_urls_global
 
 
@@ -533,6 +729,11 @@ def check_hls_stream_security(m3u8_text: str, base_url: str) -> Tuple[bool, str]
 
 
 def verify_video_stream_with_ffprobe(raw_bytes: bytes) -> Tuple[bool, int, int, str, str]:
+    """
+    严格校验视频流真实可解码画面帧（杜绝像图一那样只有分辨率标签但无法解码出画面的黑屏源）：
+      1. 校验视频编码、分辨率、像素格式 (`yuv420p`)；
+      2. 校验切片内是否包含至少 1 个 **IDR 关键帧 (`flags` 含 `K`)** 且数据包不少于 5 个。
+    """
     try:
         cmd = [
             "ffprobe", "-v", "error",
@@ -569,10 +770,6 @@ def verify_video_stream_with_ffprobe(raw_bytes: bytes) -> Tuple[bool, int, int, 
 
         if width < 640 or height < 360:
             return False, width, height, f"分辨率过低({width}x{height})", ""
-
-        # 不采集 4K / 8K 超高清视频流 (width >= 3800)，防止混入 CCTV-4 或 CCTV-8
-        if width >= 3800 or height >= 2000:
-            return False, width, height, f"过滤4K/8K超高清频道({width}x{height})", ""
 
         if pix_fmt and ("10le" in pix_fmt or "422" in pix_fmt or "444" in pix_fmt):
             return False, width, height, f"盒子不兼容像素格式({pix_fmt})", ""
@@ -616,7 +813,7 @@ def recognize_channel_from_video_slice(
                 "ffmpeg", "-hide_banner", "-loglevel", "error",
                 "-i", "pipe:0",
                 "-frames:v", "1",
-                "-vf", "crop=iw:ih*0.24:0:0,scale=1280:-1",
+                "-vf", "crop=iw:ih*0.22:0:0,scale=960:-1",
                 "-f", "image2pipe", "-vcodec", "png", "pipe:1"
             ]
             proc = subprocess.run(
@@ -624,24 +821,21 @@ def recognize_channel_from_video_slice(
                 input=raw_bytes[:512 * 1024],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                timeout=2.8
+                timeout=2.5
             )
             if proc.returncode == 0 and proc.stdout:
                 img_arr = np.frombuffer(proc.stdout, dtype=np.uint8)
                 top_banner = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
                 if top_banner is not None and top_banner.size > 0:
                     h, w = top_banner.shape[:2]
-                    left_crop = top_banner[:, :int(w * 0.42)]
-                    right_crop = top_banner[:, int(w * 0.62):]
+                    left_crop = top_banner[:, :int(w * 0.38)]
+                    right_crop = top_banner[:, int(w * 0.65):]
 
                     gray_left = cv2.cvtColor(left_crop, cv2.COLOR_BGR2GRAY)
                     upscaled_left = cv2.resize(gray_left, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
-                    _, thresh_inv = cv2.threshold(upscaled_left, 170, 255, cv2.THRESH_BINARY_INV)
+                    _, thresh_inv = cv2.threshold(upscaled_left, 175, 255, cv2.THRESH_BINARY_INV)
 
-                    gray_right = cv2.cvtColor(right_crop, cv2.COLOR_BGR2GRAY)
-                    upscaled_right = cv2.resize(gray_right, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
-
-                    candidates_img = [upscaled_left, thresh_inv, upscaled_right]
+                    candidates_img = [upscaled_left, thresh_inv, right_crop]
                     collected_texts: List[str] = []
 
                     for img_variant in candidates_img:
@@ -650,15 +844,13 @@ def recognize_channel_from_video_slice(
                             text_piece = " ".join(item[1] for item in res if len(item) >= 2 and item[1])
                             if text_piece:
                                 collected_texts.append(text_piece)
+                                matched_ch = parse_ocr_text_to_channel(text_piece, target_channels)
+                                if matched_ch:
+                                    return matched_ch
 
                     if collected_texts:
                         combined_ocr = " ".join(collected_texts)
                         matched_ch = parse_ocr_text_to_channel(combined_ocr, target_channels)
-                        if matched_ch:
-                            return matched_ch
-
-                    for text_piece in collected_texts:
-                        matched_ch = parse_ocr_text_to_channel(text_piece, target_channels)
                         if matched_ch:
                             return matched_ch
         except Exception:
@@ -673,6 +865,8 @@ def recognize_channel_from_video_slice(
 
 
 def evaluate_domestic_ip_affinity(url: str, ttfb_ms: float) -> float:
+    # 云端无法判断国内运营商路由；不再按域名/伪装 IP 加分或一票否决。
+    # 仅保留首包响应的轻微惩罚，避免将它误当成国内实测结论。
     if ttfb_ms > 3500:
         return 0.82
     if ttfb_ms > 1800:
@@ -775,6 +969,7 @@ def test_single_stream_tvbox(
                 return channel_name, channel_name, clean_url, 0.0, ttfb_ms, 0, 0, False, "内网切片不可达"
 
         download_start = time.time()
+        # 裂变源来自已达标种子：二次验证以画面/视频轨/OCR为主，缩短采样窗口，不重复执行严格速度淘汰。
         sample_timeout = min(CHUNK_DOWNLOAD_TIMEOUT, 5.0) if fast_verify else CHUNK_DOWNLOAD_TIMEOUT
         sample_max_bytes = min(CHUNK_DOWNLOAD_MAX_BYTES, 768 * 1024) if fast_verify else CHUNK_DOWNLOAD_MAX_BYTES
         bytes_received = 0
@@ -837,9 +1032,7 @@ def test_single_stream_tvbox(
             width, height = m3u8_res_hint
             video_tag = f"{width}x{height} (H264)"
 
-        if width >= 3800 or height >= 2000:
-            return channel_name, channel_name, clean_url, 0.0, ttfb_ms, width, height, False, f"过滤4K/8K超高清频道({width}x{height})"
-
+        # 计算多切片稳态速度
         duration = max(time.time() - download_start, 0.12)
         avg_speed_kbs = (bytes_received / 1024.0) / duration
         if len(segment_speeds) >= 2:
@@ -850,6 +1043,7 @@ def test_single_stream_tvbox(
 
         effective_speed_kbs = steady_speed_kbs * affinity_weight
 
+        # 【核心改进】按当前画面的实际分辨率校验其专属最低速度门槛！
         min_req_speed, fluent_req_speed, _ = get_resolution_speed_thresholds(width, height)
         if (not fast_verify) and effective_speed_kbs < min_req_speed:
             return (
@@ -867,23 +1061,10 @@ def test_single_stream_tvbox(
         _, tier_label = classify_stream_quality_group(width, height, effective_speed_kbs, video_tag)
         tagged_vtag = f"{video_tag} [{tier_label}]"
 
-        # 识别切片画面台标 Logo，自动纠正错误台名并彻底剔除 CCTV-4K / CCTV-8K
+        # 识别切片画面左上角台标 Logo，自动纠正错位频道
         final_channel_name = channel_name
         detected_ch = recognize_channel_from_video_slice(raw_bytes, service_hint=service_hint, target_channels=target_channels)
         if detected_ch:
-            if detected_ch == "__BLOCK_4K_8K__":
-                return (
-                    channel_name,
-                    channel_name,
-                    clean_url,
-                    effective_speed_kbs,
-                    ttfb_ms,
-                    width,
-                    height,
-                    False,
-                    "台标识别为CCTV-4K/8K(不采集已剔除)"
-                )
-
             norm_detected = normalize_channel_name(detected_ch, target_channels)
             norm_original = normalize_channel_name(channel_name, target_channels)
             if norm_detected and norm_detected != norm_original:
@@ -908,7 +1089,7 @@ def batch_evaluate_streams(
         for u in urls:
             tasks.append((ch, u))
 
-    ocr_status = "已开启 (RapidOCR 画面台标精准识别 + 剔除4K/8K + 自动纠正频道名称)" if (ENABLE_LOGO_OCR and _OCR_AVAILABLE) else "仅 TS 元数据校验"
+    ocr_status = "已开启 (RapidOCR 左上角台标识别纠错)" if (ENABLE_LOGO_OCR and _OCR_AVAILABLE) else "仅 TS 元数据校验"
     print("\n" + "=" * 90, flush=True)
     print(f"⚡ {stage_title}", flush=True)
     print(
@@ -943,7 +1124,7 @@ def batch_evaluate_streams(
                 if final_ch != orig_ch:
                     corrected_count += 1
                     print(
-                        f"  [🔄台标纠错] 画面台标识别为「{final_ch}」，已将原「{orig_ch}」自动改正为「{final_ch}」！({vtag}, {spd:.0f}KB/s)",
+                        f"  [🔄台标纠错] 视频左上角台标识别为「{final_ch}」，已将原「{orig_ch}」自动改正为「{final_ch}」！({vtag}, {spd:.0f}KB/s)",
                         flush=True
                     )
                 qualified[final_ch].append((url, spd, ttfb, width, height, vtag))
@@ -980,7 +1161,7 @@ def step4_fission_high_speed_sources(
     target_channels: Set[str]
 ) -> Dict[str, List[str]]:
     print("\n" + "=" * 76, flush=True)
-    print("🧬 【第四步】央卫视及CHC电影智能裂变补齐 (cctv1~17/5+/4欧4美/卫视/CHC等)", flush=True)
+    print("🧬 【第四步】央卫视智能裂变补齐 (cctv1hd -> cctv1~17hd / dfwshd -> jxwshd,hnwshd 等)", flush=True)
     print("=" * 76, flush=True)
 
     fission_candidates: Dict[str, List[str]] = {ch: [] for ch in target_channels}
@@ -1026,7 +1207,7 @@ def step4_fission_high_speed_sources(
     total_fission = cctv_fission_added + sat_fission_added
     print(f"[✓] 第四步裂变完成：共生成【全新未测速】的裂变候选源 {total_fission} 条", flush=True)
     print(f"    - 央视频道后缀规律裂变新增: {cctv_fission_added} 条", flush=True)
-    print(f"    - 卫视与电视频道后缀规律裂变新增: {sat_fission_added} 条", flush=True)
+    print(f"    - 卫视频道后缀规律裂变新增: {sat_fission_added} 条", flush=True)
     print(f"    - 自动跳过裂变前已测过速/已存在的直播源地址: {skipped_already_tested} 条 (不重复测速)", flush=True)
     return fission_candidates
 
@@ -1041,12 +1222,13 @@ def step5_merge_sort_and_export(
     step3_count = sum(len(v) for v in step3_qualified.values())
     step5_count = sum(len(v) for v in step5_qualified.values())
     date_only_str = datetime.datetime.now().strftime("%Y-%m-%d")
+    pages_host = "https://" + "tvzb.github.io"
     epg_host = "https://" + "live.fanmingming.com"
 
     print("\n" + "=" * 92, flush=True)
     print("🏆 【第五步(2/2)】汇总合并达标源，按【1.高清且流畅 -> 2.流畅标清 -> 3.高清卡顿 -> 4.标清卡顿】排序输出", flush=True)
     print(f"   - 第三步初次测速达标源: {step3_count} 条 | 第五步裂变新源二次测速新增达标源: {step5_count} 条", flush=True)
-    print(f"{'频道名称':<20} | {'有效源数':<8} | {'首选规格与档位':<28} | {'稳态实测速度':<13} | {'首包延迟':<10}", flush=True)
+    print(f"{'频道名称':<18} | {'有效源数':<8} | {'首选规格与档位':<28} | {'稳态实测速度':<13} | {'首包延迟':<10}", flush=True)
     print("-" * 92, flush=True)
 
     txt_lines: List[str] = []
@@ -1058,7 +1240,7 @@ def step5_merge_sort_and_export(
     total_streams_ready = 0
     first_valid_stream_url = ""
 
-    # 1. 依次输出「央视频道」->「卫视频道」->「电视频道」
+    # 1. 输出「央视频道」与「卫视频道」在最前
     for group_name, ch_list in user_struct.items():
         group_txt = [f"{group_name},#genre#"]
         group_has_items = False
@@ -1072,6 +1254,7 @@ def step5_merge_sort_and_export(
                 if norm_u not in combined_map or stream_sort_key(item) > stream_sort_key(combined_map[norm_u]):
                     combined_map[norm_u] = item
 
+            # 严格按四档规则排序：高清且流畅 -> 流畅标清 -> 高清卡顿 -> 标清卡顿
             sorted_streams = sorted(combined_map.values(), key=stream_sort_key, reverse=True)
 
             final_streams: List[Tuple[str, float, float, int, int, str]] = []
@@ -1089,10 +1272,10 @@ def step5_merge_sort_and_export(
                 total_channels_ready += 1
                 total_streams_ready += len(final_streams)
                 top_url, top_spd, top_ttfb, top_w, top_h, top_vtag = final_streams[0]
-                if not first_valid_stream_url:
+                if first_valid_stream_url.endswith("/IPTV/live.txt"):
                     first_valid_stream_url = top_url
                 print(
-                    f"{display_ch:<20} | {len(final_streams):<8} | {top_vtag:<28} | {top_spd:>7.1f} KB/s | {top_ttfb:>6.0f} ms",
+                    f"{display_ch:<18} | {len(final_streams):<8} | {top_vtag:<28} | {top_spd:>7.1f} KB/s | {top_ttfb:>6.0f} ms",
                     flush=True
                 )
                 for url, spd, ttfb, w, h, vtag in final_streams:
@@ -1100,12 +1283,13 @@ def step5_merge_sort_and_export(
                     m3u_lines.append(f'#EXTINF:-1 tvg-name="{std_ch}" group-title="{group_name}",{display_ch}')
                     m3u_lines.append(url)
             else:
-                print(f"{display_ch:<20} | {'0 (无达标)':<8} | {'--':<28} | {'--':>11} | {'--':>9}", flush=True)
+                print(f"{display_ch:<18} | {'0 (无达标)':<8} | {'--':<28} | {'--':>11} | {'--':>9}", flush=True)
 
         if group_has_items:
             txt_lines.extend(group_txt)
 
-    # 2. 在底部依次添加「更新时间」与「频道定制」
+    # 2. 按图二要求，在央视频道、卫视频道下方依次添加「更新时间」与「频道定制」
+    # 点开「更新时间」仅显示年-月-日，例如 2026-10-31
     txt_lines.append("更新时间,#genre#")
     txt_lines.append(f"{date_only_str},{first_valid_stream_url}" if first_valid_stream_url else f"{date_only_str},#genre#")
     txt_lines.append("频道定制,#genre#")
@@ -1126,8 +1310,8 @@ def step5_merge_sort_and_export(
         f.write("\n".join(m3u_lines) + "\n")
 
     print("=" * 92, flush=True)
-    print("🎉 五步工作流全部完成！" if total_streams_ready else "⚠️ 工作流已执行完毕，但本轮没有通过筛选的直播源；已生成空订阅文件。", flush=True)
-    print(f"   - 分类菜单顺序: 央视频道 -> 卫视频道 -> 电视频道 -> 更新时间 ({date_only_str}) -> 频道定制 ({CUSTOM_WECHAT_LABEL})")
+    print("🎉 五步工作流全部完成！" if total_streams_ready else "⚠️ 工作流已执行完毕，但本轮没有通过筛选的直播源；已生成空订阅文件，避免伪造播放地址。", flush=True)
+    print(f"   - 分类菜单顺序: 央视频道 -> 卫视频道 -> 更新时间 ({date_only_str}) -> 频道定制 ({CUSTOM_WECHAT_LABEL})")
     print(f"   - 覆盖官方频道: {total_channels_ready} 个")
     print(f"   - 最终收录真视频源: {total_streams_ready} 条 (按 高清流畅 -> 流畅标清 -> 高清备用 -> 标清备用 排序)")
     print(f"   - TVBox TXT 订阅文件: {OUTPUT_LIVE_TXT}")
@@ -1135,10 +1319,46 @@ def step5_merge_sort_and_export(
     print("=" * 92, flush=True)
 
 
+def save_intermediate_cleaned_pool(
+    cleaned_pool: Dict[str, List[str]],
+    user_struct: Dict[str, List[str]],
+    target_channels: Set[str]
+):
+    date_only_str = datetime.datetime.now().strftime("%Y-%m-%d")
+    pages_host = "https://" + "tvzb.github.io"
+    epg_host = "https://" + "live.fanmingming.com"
+    txt_lines: List[str] = []
+    m3u_lines: List[str] = [
+        f'#EXTM3U x-tvg-url="{epg_host}/e.xml"',
+    ]
+    for group_name, ch_list in user_struct.items():
+        group_txt = [f"{group_name},#genre#"]
+        for display_ch in ch_list:
+            std_ch = normalize_channel_name(display_ch, target_channels) or display_ch
+            for u in cleaned_pool.get(std_ch, []):
+                group_txt.append(f"{display_ch},{u}")
+                m3u_lines.append(f'#EXTINF:-1 tvg-name="{std_ch}" group-title="{group_name}",{display_ch}')
+                m3u_lines.append(u)
+        if len(group_txt) > 1:
+            txt_lines.extend(group_txt)
+
+    txt_lines.extend([
+        "更新时间,#genre#",
+        f"{date_only_str},{pages_host}/IPTV/raw_sources.txt",
+        "频道定制,#genre#",
+        f"{CUSTOM_WECHAT_LABEL},{pages_host}/IPTV/raw_sources.txt",
+    ])
+
+    with open(RAW_SOURCES_TXT, "w", encoding="utf-8") as f:
+        f.write("\n".join(txt_lines) + "\n")
+    with open(RAW_SOURCES_M3U, "w", encoding="utf-8") as f:
+        f.write("\n".join(m3u_lines) + "\n")
+
+
 def run_standalone_speedtest_mode(input_file: str):
     print("=" * 86, flush=True)
     print(f"⚡ 【在线测速模式 speedtest.yml】读取输入文件: {input_file}", flush=True)
-    print("   流程：HTTP 去重 -> 分辨率动态门槛测速 + 台标 OCR 纠错 -> 四档流畅度排序", flush=True)
+    print("   流程：HTTP 去重 -> 分辨率动态门槛测速 + 左上角台标 OCR 纠错 -> 四档流畅度排序", flush=True)
     print("=" * 86, flush=True)
 
     if not os.path.exists(input_file):
@@ -1147,9 +1367,6 @@ def run_standalone_speedtest_mode(input_file: str):
 
     with open(input_file, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
-
-    user_struct = load_user_channel_structure()
-    target_channels, _ = build_channel_Lookup_map(user_struct)
 
     raw_entries = extract_raw_entries_from_text(content)
     seen_urls: Set[str] = set()
@@ -1160,22 +1377,18 @@ def run_standalone_speedtest_mode(input_file: str):
         clean_u = clean_stream_url(sanitize_url(raw_u))
         if not clean_u:
             continue
-        norm_ch = normalize_channel_name(raw_ch, target_channels)
-        if not norm_ch:
-            continue
         norm_u = clean_u.rstrip("/")
         if norm_u not in seen_urls:
             seen_urls.add(norm_u)
-            if norm_ch not in channel_order:
-                channel_order.append(norm_ch)
-            pool[norm_ch].append(clean_u)
+            if raw_ch not in channel_order:
+                channel_order.append(raw_ch)
+            pool[raw_ch].append(clean_u)
 
-    print(f"[*] 原始提取 {len(raw_entries)} 条，过滤 4K/8K 与 HTTP 严格去重后共 {len(seen_urls)} 条唯一地址。", flush=True)
+    print(f"[*] 原始提取 {len(raw_entries)} 条，HTTP 严格去重后共 {len(seen_urls)} 条唯一地址。", flush=True)
 
     qualified = batch_evaluate_streams(
         pool,
-        stage_title="【在线去重测速】分辨率动态速度门槛 & 台标 OCR 自动纠错",
-        target_channels=target_channels
+        stage_title="【在线去重测速】分辨率动态速度门槛 & 左上角台标 OCR 自动纠错"
     )
 
     for q_ch in qualified:
@@ -1213,6 +1426,7 @@ def run_standalone_speedtest_mode(input_file: str):
         f.write("\n".join(out_m3u_lines) + "\n")
 
     print(f"[✓] 在线去重测速与台标纠错完成！结果已写入 {OUTPUT_LIVE_TXT} 与 {OUTPUT_LIVE_M3U}", flush=True)
+
 
 
 def save_qualified_raw_live(
@@ -1259,7 +1473,7 @@ def run_five_step_workflow(search_pages: int = DEFAULT_SEARCH_PAGES):
 
     step3_qualified = batch_evaluate_streams(
         cleaned_pool,
-        stage_title="【第三步】初次分辨率动态测速、关键帧校验 & 台标 OCR 自动纠错",
+        stage_title="【第三步】初次分辨率动态测速、关键帧校验 & 左上角台标 OCR 自动纠错",
         target_channels=target_channels
     )
     step3_passed_total = sum(len(v) for v in step3_qualified.values())
@@ -1286,37 +1500,12 @@ def run_five_step_workflow(search_pages: int = DEFAULT_SEARCH_PAGES):
     print(f"\n[🏁] 全流程执行完毕，总耗时: {elapsed:.1f} 秒", flush=True)
 
 
-def write_emergency_outputs(reason: str = ""):
-    """异常兜底：确保 live.txt / live.m3u 总会生成，不伪造可播放地址。"""
-    date_text = datetime.datetime.now().strftime("%Y-%m-%d")
-    epg_host = "https://live.fanmingming.com"
-    txt = [
-        "央视频道,#genre#",
-        "卫视频道,#genre#",
-        "电视频道,#genre#",
-        "更新时间,#genre#",
-        f"{date_text},#genre#",
-        "频道定制,#genre#",
-        f"{CUSTOM_WECHAT_LABEL},#genre#",
-    ]
-    m3u = [f'#EXTM3U x-tvg-url="{epg_host}/e.xml"']
-    with open(OUTPUT_LIVE_TXT, "w", encoding="utf-8") as f:
-        f.write("\n".join(txt) + "\n")
-    with open(OUTPUT_LIVE_M3U, "w", encoding="utf-8") as f:
-        f.write("\n".join(m3u) + "\n")
-    if not os.path.exists("raw_live.txt"):
-        with open("raw_live.txt", "w", encoding="utf-8") as f:
-            f.write("")
-    with open("workflow_error.txt", "w", encoding="utf-8") as f:
-        f.write(reason + "\n")
-
-
 def main():
     parser = argparse.ArgumentParser(description="IPTV 自动化五步搜索裂变测速引擎")
-    parser.add_argument("search_pages_pos", nargs="?", type=int, default=None, help="搜索结果采集页数 (默认 2)")
+    parser.add_argument("search_pages_pos", nargs="?", type=int, default=None, help="搜索结果采集页数 (默认 1)")
     parser.add_argument("--mode", choices=["iptv", "speedtest"], default="iptv", help="运行模式: iptv 或 speedtest")
     parser.add_argument("--input", default=RAW_SOURCES_TXT, help="speedtest 模式下的输入文件路径")
-    parser.add_argument("--pages", type=int, default=DEFAULT_SEARCH_PAGES, help="采集搜索结果的页数 (默认 2)")
+    parser.add_argument("--pages", type=int, default=DEFAULT_SEARCH_PAGES, help="采集搜索结果的页数 (默认 1)")
 
     args, _ = parser.parse_known_args()
     effective_pages = args.search_pages_pos if args.search_pages_pos is not None else args.pages
@@ -1328,9 +1517,27 @@ def main():
         try:
             run_five_step_workflow(search_pages=effective_pages)
         except Exception as exc:
+            # 即使采集/测速中途异常，也写出可识别的空订阅文件，方便 Actions 上传诊断产物。
             print(f"[FATAL] 工作流异常：{type(exc).__name__}: {exc}", flush=True)
             write_emergency_outputs(str(exc))
             raise
+
+
+def write_emergency_outputs(reason: str = ""):
+    """异常兜底：确保 live.txt / live.m3u 总会生成，不伪造可播放地址。"""
+    date_text = datetime.datetime.now().strftime("%Y-%m-%d")
+    epg_host = "https://live.fanmingming.com"
+    txt = ["央视频道,#genre#", "卫视频道,#genre#", "更新时间,#genre#", f"{date_text},#genre#", "频道定制,#genre#", f"{CUSTOM_WECHAT_LABEL},#genre#"]
+    m3u = [f'#EXTM3U x-tvg-url="{epg_host}/e.xml"']
+    with open(OUTPUT_LIVE_TXT, "w", encoding="utf-8") as f:
+        f.write("\n".join(txt) + "\n")
+    with open(OUTPUT_LIVE_M3U, "w", encoding="utf-8") as f:
+        f.write("\n".join(m3u) + "\n")
+    if not os.path.exists("raw_live.txt"):
+        with open("raw_live.txt", "w", encoding="utf-8") as f:
+            f.write("")
+    with open("workflow_error.txt", "w", encoding="utf-8") as f:
+        f.write(reason + "\n")
 
 
 if __name__ == "__main__":
