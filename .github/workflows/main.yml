@@ -1,132 +1,79 @@
-name: IPTV 自动采集与联通宽带优选
-
+name: IPTV 主采集与标准订阅更新
 on:
   workflow_dispatch:
     inputs:
-      search_pages:
-        description: "GitHub 搜索采集页数（默认采集前 2 页）"
-        required: false
-        default: "2"
-        type: choice
-        options: ["1", "2", "3", "4", "5"]
-      search_month:
-        description: "GitHub 搜索更新月份标记"
-        required: false
-        default: "2026-10"
-        type: string
-      enable_logo_ocr:
-        description: "启用视频台标 OCR 精准纠错"
-        required: false
-        default: "true"
-        type: choice
-        options: ["true", "false"]
+      search_pages: {description: 'GitHub 搜索页数', required: false, default: '3', type: choice, options: ['1','2','3','4','5']}
+      recent_days: {description: '最近提交天数', required: false, default: '30', type: choice, options: ['14','30','45','60']}
+      enable_logo_ocr: {description: '启用台标 OCR', required: false, default: 'true', type: choice, options: ['true','false']}
+  schedule:
+    - cron: '20 7 1,16 * *'
   push:
     branches: [main, master]
-    paths:
-      - "main.py"
-      - "config.py"
-      - "requirements.txt"
-      - "tvbox_probe.py"
-      - ".github/workflows/main.yml"
-
+    paths: ['main.py','config.py','requirements.txt','scripts/**','.github/workflows/main.yml']
 concurrency:
-  group: iptv-harvest-${{ github.ref }}
+  group: 'iptv-main-${{ github.ref }}'
   cancel-in-progress: false
-
-permissions:
-  contents: write
-
+permissions: {contents: write}
 jobs:
   harvest:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 100
     env:
       TZ: Asia/Shanghai
-      PYTHONUNBUFFERED: "1"
-      SEARCH_MONTH: ${{ inputs.search_month || '2026-10' }}
+      PYTHONUNBUFFERED: '1'
+      RECENT_DAYS: ${{ inputs.recent_days || '30' }}
+      MAX_RECENT_REPOS: '60'
       ENABLE_LOGO_OCR: ${{ inputs.enable_logo_ocr || 'true' }}
-      SEARCH_PAGES: ${{ inputs.search_pages || '2' }}
-
+      SEARCH_PAGES: ${{ inputs.search_pages || '3' }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11', cache: pip}
       - name: Install dependencies
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y --no-install-recommends ffmpeg
+          sudo apt-get update -y && sudo apt-get install -y --no-install-recommends ffmpeg
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
-      - name: Run IPTV collector
+      - name: Run original five-step collector
+        env: {GITHUB_TOKEN: '${{ secrets.PAT_TOKEN || github.token }}'}
+        run: python main.py "${SEARCH_PAGES}"
+      - name: Build catalogue and free playlist
+        if: success()
+        run: python scripts/build_catalog.py
+      - name: Validate outputs
+        if: success()
+        run: |
+          test -s channels.json
+          test -s test.txt
+          COUNT=$(grep -Ec '^[^#].*,https?://' live.txt || true)
+          echo "Valid playlist rows: $COUNT"
+          if [ "$COUNT" -lt 5 ]; then echo 'Too few streams; refusing publish'; exit 1; fi
+      - name: Upload outputs to Cloudflare R2
+        if: success()
         env:
-          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN || github.token }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
-          python main.py "${SEARCH_PAGES}"
-
-      - name: Ensure output files exist
+          if [ -z "$R2_ACCESS_KEY_ID" ] || [ -z "$R2_BUCKET" ]; then echo 'Missing R2 credentials; cannot publish production playlists'; exit 1; fi
+          export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
+          export AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
+          pip install awscli
+          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          aws s3 cp live.txt "s3://${R2_BUCKET}/public/live.txt" --endpoint-url "$ENDPOINT" --content-type 'text/plain; charset=utf-8'
+          aws s3 cp test.txt "s3://${R2_BUCKET}/public/test.txt" --endpoint-url "$ENDPOINT" --content-type 'text/plain; charset=utf-8'
+          aws s3 cp channels.json "s3://${R2_BUCKET}/internal/channels.json" --endpoint-url "$ENDPOINT" --content-type 'application/json'
+      - uses: actions/upload-artifact@v4
         if: always()
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          import datetime
-          date = datetime.datetime.now().strftime('%Y-%m-%d')
-          if not Path('live.txt').exists():
-              Path('live.txt').write_text('央视频道,#genre#\n卫视频道,#genre#\n电视频道,#genre#\n更新时间,#genre#\n' + date + ',#genre#\n频道定制,#genre#\n微信：bofutz,#genre#\n', encoding='utf-8')
-          if not Path('live.m3u').exists():
-              Path('live.m3u').write_text('#EXTM3U\n', encoding='utf-8')
-          if not Path('raw_live.txt').exists():
-              Path('raw_live.txt').write_text('', encoding='utf-8')
-          print('raw_live.txt bytes:', Path('raw_live.txt').stat().st_size)
-          print('live.txt bytes:', Path('live.txt').stat().st_size)
-          print('live.m3u bytes:', Path('live.m3u').stat().st_size)
-          PY
-
-      - name: Upload result files (always)
-        if: always()
-        uses: actions/upload-artifact@v4
         with:
-          name: iptv-results-${{ github.run_number }}
-          if-no-files-found: warn
+          name: iptv-main-${{ github.run_number }}
           retention-days: 14
           path: |
             live.txt
             live.m3u
             raw_live.txt
-            raw_sources.txt
-            raw_sources.m3u
+            test.txt
+            channels.json
             workflow_error.txt
-
-      - name: Validate and commit playlist
-        if: success()
-        shell: bash
-        run: |
-          set -euo pipefail
-          STREAM_COUNT=$(grep -E '^[^#].*,https?://' live.txt | wc -l || true)
-          echo "最终 TXT 直播源记录：${STREAM_COUNT}"
-          if [ "${STREAM_COUNT}" -lt 5 ]; then
-            echo "本轮不足5条有效源：保留仓库原有订阅，不覆盖线上稳定版本。结果仍可从 Actions Artifacts 下载。"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f live.txt live.m3u
-          [ ! -f raw_live.txt ] || git add -f raw_live.txt
-          [ ! -f raw_sources.txt ] || git add -f raw_sources.txt
-          [ ! -f raw_sources.m3u ] || git add -f raw_sources.m3u
-          if git diff --cached --quiet; then
-            echo "订阅内容无变化，无需提交。"
-          else
-            git commit -m "chore(iptv): refresh playlists $(date '+%Y-%m-%d %H:%M')"
-            git fetch origin "${GITHUB_REF_NAME}"
-            git rebase "origin/${GITHUB_REF_NAME}"
-            git push origin "HEAD:${GITHUB_REF_NAME}"
-          fi
