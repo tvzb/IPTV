@@ -15,6 +15,6 @@ bucket_name = "iptv-files"
 [vars]
 SITE_NAME = "IPTV 直播源中心"
 PUBLIC_BASE_URL = "https://YOUR_DOMAIN"
-GITHUB_OWNER = "YOUR_GITHUB_OWNER"
-GITHUB_REPO = "YOUR_REPOSITORY"
+GITHUB_OWNER = "tvzb"
+GITHUB_REPO = "IPTV"
 GITHUB_CUSTOM_WORKFLOW = "custom.yml"
