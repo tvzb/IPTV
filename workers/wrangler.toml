@@ -1,0 +1,20 @@
+name = "iptv-platform-api"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "iptv-platform"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "REPLACE_WITH_R2_BUCKET"
+
+[vars]
+SITE_NAME = "IPTV 直播源中心"
+PUBLIC_BASE_URL = "https://YOUR_DOMAIN"
+GITHUB_OWNER = "YOUR_GITHUB_OWNER"
+GITHUB_REPO = "YOUR_REPOSITORY"
+GITHUB_CUSTOM_WORKFLOW = "custom.yml"
