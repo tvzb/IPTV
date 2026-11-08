@@ -1,0 +1,78 @@
+name: IPTV 用户定制频道采集与生成
+on:
+  workflow_dispatch:
+    inputs:
+      order_id: {description: '已审核的定制订单号', required: true, type: string}
+permissions: {contents: read}
+concurrency:
+  group: 'iptv-custom-${{ inputs.order_id }}'
+  cancel-in-progress: false
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11', cache: pip}
+      - name: Install collector dependencies
+        run: |
+          sudo apt-get update -y && sudo apt-get install -y --no-install-recommends ffmpeg
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Fetch approved order configuration
+        env:
+          API_BASE: ${{ secrets.PLATFORM_API_BASE }}
+          JOB_TOKEN: ${{ secrets.PLATFORM_JOB_TOKEN }}
+          ORDER_ID: ${{ inputs.order_id }}
+        run: |
+          python - <<'PY'
+          import os, urllib.request
+          base=os.environ['API_BASE'].rstrip('/')
+          req=urllib.request.Request(base+'/api/internal/jobs/'+os.environ['ORDER_ID'],headers={'Authorization':'Bearer '+os.environ['JOB_TOKEN']})
+          with urllib.request.urlopen(req,timeout=30) as r: open('custom_payload.json','wb').write(r.read())
+          req=urllib.request.Request(base+'/api/internal/live',headers={'Authorization':'Bearer '+os.environ['JOB_TOKEN']})
+          try:
+            with urllib.request.urlopen(req,timeout=30) as r: open('standard_live.txt','wb').write(r.read())
+          except Exception: pass
+          PY
+          python scripts/prepare_custom.py custom_payload.json
+      - name: Run existing collector for selected channels
+        env:
+          CUSTOM_CHANNELS_FILE: custom_channels.json
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN || github.token }}
+          RECENT_DAYS: '30'
+          SEARCH_PAGES: '1'
+          ENABLE_LOGO_OCR: 'true'
+          PYTHONUNBUFFERED: '1'
+          TZ: Asia/Shanghai
+        run: python main.py 1
+      - name: Build user-specific TXT
+        run: python scripts/publish_custom.py
+      - name: Upload private user playlist to R2
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          API_BASE: ${{ secrets.PLATFORM_API_BASE }}
+          JOB_TOKEN: ${{ secrets.PLATFORM_JOB_TOKEN }}
+          ORDER_ID: ${{ inputs.order_id }}
+        run: |
+          export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
+          export AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
+          pip install awscli
+          SLUG=$(python -c "import json;print(json.load(open('custom_result.json'))['slug'])")
+          aws s3 cp "$SLUG.txt" "s3://${R2_BUCKET}/custom/${SLUG}.txt" --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" --content-type 'text/plain; charset=utf-8'
+          if [ -f "$SLUG-merged.txt" ]; then aws s3 cp "$SLUG-merged.txt" "s3://${R2_BUCKET}/custom/${SLUG}-merged.txt" --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" --content-type 'text/plain; charset=utf-8'; fi
+          curl -fsS -X POST "$API_BASE/api/internal/jobs/$ORDER_ID/complete" -H "Authorization: Bearer $JOB_TOKEN" -H 'Content-Type: application/json' --data-binary @custom_result.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: iptv-custom-${{ inputs.order_id }}
+          retention-days: 7
+          path: |
+            custom_result.json
+            custom_channels.json
+            live.txt
+            workflow_error.txt
