@@ -14,7 +14,7 @@ bucket_name = "iptv-files"
 
 [vars]
 SITE_NAME = "IPTV 直播源中心"
-PUBLIC_BASE_URL = "https://YOUR_DOMAIN"
+PUBLIC_BASE_URL = "https://iptv-platform-api.hahagw2016.workers.dev"
 GITHUB_OWNER = "tvzb"
 GITHUB_REPO = "IPTV"
 GITHUB_CUSTOM_WORKFLOW = "custom.yml"
